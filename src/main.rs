@@ -420,26 +420,92 @@ enum Light {
     Red,
 }
 
-fn icon(light: Light) -> Icon {
+fn icon_pixels(light: Light, favicon: Option<&[u8]>) -> Vec<u8> {
     let (r, g, b) = match light {
         Light::Green => (0x3f, 0xb9, 0x50),
         Light::Amber => (0xe3, 0xa0, 0x08),
         Light::Red => (0xe0, 0x4f, 0x4f),
     };
     let n = 32u32;
-    let mut px = Vec::with_capacity((n * n * 4) as usize);
+    let mut px = favicon.map_or_else(|| vec![0; (n * n * 4) as usize], |p| p.to_vec());
     for y in 0..n {
         for x in 0..n {
-            let (dx, dy) = (x as f32 - 15.5, y as f32 - 15.5);
+            let composed = favicon.is_some();
+            let center = if composed { 24.5 } else { 15.5 };
+            let radius = if composed { 6.5 } else { 14.5 };
+            let (dx, dy) = (x as f32 - center, y as f32 - center);
             let d = (dx * dx + dy * dy).sqrt();
-            let a = (14.5 - d).clamp(0.0, 1.0);
-            // Dark ring so the dot reads on light and dark taskbars.
-            let ring = d > 11.5;
-            let (cr, cg, cb) = if ring { (r / 2, g / 2, b / 2) } else { (r, g, b) };
-            px.extend_from_slice(&[cr, cg, cb, (a * 255.0) as u8]);
+            let a = (radius - d).clamp(0.0, 1.0);
+            let inner = (radius - if composed { 1.5 } else { 3.0 } - d).clamp(0.0, 1.0);
+            let color = [r, g, b];
+            let i = ((y * n + x) * 4) as usize;
+            let old_a = px[i + 3] as f32 / 255.0;
+            let out_a = a + old_a * (1.0 - a);
+            if out_a > 0.0 {
+                for c in 0..3 {
+                    let ring = if composed { 24.0 } else { color[c] as f32 / 2.0 };
+                    let value = ring + (color[c] as f32 - ring) * inner;
+                    px[i + c] = ((value * a + px[i + c] as f32 * old_a * (1.0 - a)) / out_a).round() as u8;
+                }
+                px[i + 3] = (out_a * 255.0).round() as u8;
+            }
         }
     }
-    Icon::from_rgba(px, n, n).expect("icon")
+    px
+}
+
+fn load_favicon(dir: &Path) -> Option<Vec<u8>> {
+    let file = File::open(dir.join("client/favicon-32x32.png")).ok()?;
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    if reader.info().width != 32 || reader.info().height != 32 {
+        return None;
+    }
+    let mut buffer = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buffer).ok()?;
+    let channels = match info.color_type {
+        png::ColorType::Rgba => 4,
+        png::ColorType::Rgb => 3,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Grayscale => 1,
+        png::ColorType::Indexed => return None,
+    };
+    let mut rgba = Vec::with_capacity(32 * 32 * 4);
+    for pixel in buffer[..info.buffer_size()].chunks_exact(channels) {
+        match channels {
+            4 => rgba.extend_from_slice(pixel),
+            3 => rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]),
+            2 => rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]),
+            _ => rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], 255]),
+        }
+    }
+    Some(rgba)
+}
+
+fn icon_preview(out: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all(out)?;
+    let favicon = newest_installed().and_then(|v| load_favicon(&version_dir(&v)));
+    for (name, light, base) in [
+        ("green", Light::Green, favicon.as_deref()),
+        ("amber", Light::Amber, favicon.as_deref()),
+        ("red", Light::Red, favicon.as_deref()),
+        ("fallback", Light::Green, None),
+    ] {
+        let pixels = icon_pixels(light, base);
+        let mut scaled = Vec::with_capacity(256 * 256 * 4);
+        for y in 0..256 {
+            for x in 0..256 {
+                let i = ((y / 8) * 32 + x / 8) * 4;
+                scaled.extend_from_slice(&pixels[i..i + 4]);
+            }
+        }
+        let mut encoder = png::Encoder::new(File::create(out.join(format!("{name}.png")))?, 256, 256);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header()?.write_image_data(&scaled)?;
+    }
+    Ok(())
 }
 
 enum Msg {
@@ -634,6 +700,8 @@ struct Ui {
     quit: MenuItem,
     light: Option<Light>,
     last_state: String,
+    icon_dir: Option<PathBuf>,
+    favicon: Option<Vec<u8>>,
 }
 
 impl Ui {
@@ -644,8 +712,15 @@ impl Ui {
             (false, _) if app.want_running => Light::Amber,
             _ => Light::Red,
         };
-        if self.light != Some(light) {
-            let _ = self.tray.set_icon(Some(icon(light)));
+        let dir = app.server.as_ref().map(|s| s.version.clone()).or_else(newest_installed).map(|v| version_dir(&v));
+        let changed = self.icon_dir != dir;
+        if changed {
+            self.favicon = dir.as_deref().and_then(load_favicon);
+            self.icon_dir = dir;
+        }
+        if self.light != Some(light) || changed {
+            let pixels = icon_pixels(light, self.favicon.as_deref());
+            let _ = self.tray.set_icon(Some(Icon::from_rgba(pixels, 32, 32).expect("icon")));
             self.light = Some(light);
         }
         let head = match &app.server {
@@ -681,6 +756,15 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "icon-preview") {
+        let result = args.get(1).ok_or("usage: t3tray icon-preview <outdir>").map_err(|e| e.into())
+            .and_then(|out| icon_preview(Path::new(out)));
+        if let Err(e) = result {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Some(cmd) = args.first().filter(|a| !a.starts_with("--")) {
         std::process::exit(cli(cmd));
     }
@@ -726,8 +810,8 @@ fn main() {
     let sep1 = PredefinedMenuItem::separator();
     let sep2 = PredefinedMenuItem::separator();
     menu.append_items(&[&status, &sep1, &restart, &toggle, &update, &logs, &sep2, &quit]).expect("menu");
-    let tray = TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("T3 server").with_icon(icon(Light::Amber)).build().expect("tray");
-    let mut ui = Ui { tray, status, restart, toggle, update, logs, quit, light: None, last_state: String::new() };
+    let tray = TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("T3 server").with_icon(Icon::from_rgba(icon_pixels(Light::Amber, None), 32, 32).expect("icon")).build().expect("tray");
+    let mut ui = Ui { tray, status, restart, toggle, update, logs, quit, light: None, last_state: String::new(), icon_dir: None, favicon: None };
 
     // Start on the newest local version right away; the first check may move it later.
     app.target = desktop_version();

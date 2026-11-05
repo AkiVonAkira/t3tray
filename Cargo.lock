@@ -1313,6 +1313,7 @@ dependencies = [
 name = "t3tray"
 version = "0.1.0"
 dependencies = [
+ "png",
  "serde_json",
  "sha2",
  "tray-icon",
