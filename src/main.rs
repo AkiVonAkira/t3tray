@@ -64,8 +64,15 @@ fn log(msg: &str) {
     }
 }
 
+// Global, not Local: Local names are per session, and SSH runs in a different session
+// from the desktop where the tray lives. The user name keeps two users apart.
+fn object_name(what: &str) -> Vec<u16> {
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    wide(&format!("Global\\t3tray-{user}-{what}"))
+}
+
 fn event_name(cmd: &str) -> Vec<u16> {
-    wide(&format!("Local\\t3tray-{cmd}"))
+    object_name(cmd)
 }
 
 // ---------- CLI side ----------
@@ -123,7 +130,7 @@ fn read_state_field(key: &str) -> Option<String> {
 }
 
 fn tray_running() -> bool {
-    let name = wide("Local\\t3tray-instance");
+    let name = object_name("instance");
     let h = unsafe { OpenMutexW(SYNCHRONIZE, 0, name.as_ptr()) };
     if h.is_null() {
         return false;
@@ -666,7 +673,7 @@ fn main() {
     let host = arg_value(&args, "--host").unwrap_or_else(|| "127.0.0.1".into());
     let port: u16 = arg_value(&args, "--port").and_then(|p| p.parse().ok()).unwrap_or(3773);
 
-    let mutex_name = wide("Local\\t3tray-instance");
+    let mutex_name = object_name("instance");
     let _mutex = unsafe { CreateMutexW(std::ptr::null(), 1, mutex_name.as_ptr()) };
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         return;
