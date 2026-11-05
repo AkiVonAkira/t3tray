@@ -101,6 +101,10 @@ fn cli(cmd: &str) -> i32 {
         println!("t3tray is not running");
         return 3;
     }
+    if cmd == "start" && tray_running() && read_state_field("status").as_deref() == Some("running") {
+        println!("running {}", read_state_field("version").unwrap_or_default());
+        return 0;
+    }
     let before = read_state_field("startedAt");
     unsafe {
         SetEvent(h);
@@ -391,8 +395,16 @@ fn start_server(version: &str, host: &str, port: u16, base_dir: Option<&str>) ->
         // the job handle closes and the server goes with it, so nothing is left holding the port.
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
         SetInformationJobObject(job, JobObjectExtendedLimitInformation, (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(), std::mem::size_of_val(&info) as u32);
-        if AssignProcessToJobObject(job, child.as_raw_handle()) == 0 {
-            log(&format!("AssignProcessToJobObject failed: {}", GetLastError()));
+        if job.is_null() || AssignProcessToJobObject(job, child.as_raw_handle()) == 0 {
+            // Outside the job, stop could not end the server's tree; do not run it.
+            let err = GetLastError();
+            let mut child = child;
+            let _ = child.kill();
+            let _ = child.wait();
+            if !job.is_null() {
+                CloseHandle(job);
+            }
+            return Err(format!("could not put the server in a job object: error {err}"));
         }
         resume_threads(child.id());
         Ok(Server { child, job, version: version.to_owned() })
@@ -602,6 +614,8 @@ impl App {
             "startedAt": self.started_at,
             "lastExit": self.last_exit,
             "targetVersion": self.target,
+            // The target's server is downloaded and can start now.
+            "targetInstalled": self.target.as_deref().is_some_and(installed),
             "updateReady": self.update_ready(),
             "message": self.message,
             "logs": root().join("logs").to_string_lossy(),
