@@ -420,48 +420,69 @@ enum Light {
     Red,
 }
 
+fn area_resize(src: &[u8], width: usize, height: usize, size: usize) -> Vec<u8> {
+    let mut out = vec![0; size * size * 4];
+    for y in 0..size {
+        for x in 0..size {
+            let (left, right) = (x as f64 * width as f64 / size as f64, (x + 1) as f64 * width as f64 / size as f64);
+            let (top, bottom) = (y as f64 * height as f64 / size as f64, (y + 1) as f64 * height as f64 / size as f64);
+            let mut sum = [0.0; 4];
+            for sy in top.floor() as usize..bottom.ceil() as usize {
+                for sx in left.floor() as usize..right.ceil() as usize {
+                    let weight = (right.min((sx + 1) as f64) - left.max(sx as f64)) * (bottom.min((sy + 1) as f64) - top.max(sy as f64));
+                    let i = (sy.min(height - 1) * width + sx.min(width - 1)) * 4;
+                    let alpha = src[i + 3] as f64 / 255.0;
+                    for c in 0..3 { sum[c] += src[i + c] as f64 * alpha * weight; }
+                    sum[3] += alpha * weight;
+                }
+            }
+            let i = (y * size + x) * 4;
+            if sum[3] > 0.0 {
+                for c in 0..3 { out[i + c] = (sum[c] / sum[3]).round() as u8; }
+                out[i + 3] = (sum[3] / ((right - left) * (bottom - top)) * 255.0).round() as u8;
+            }
+        }
+    }
+    out
+}
+
 fn icon_pixels(light: Light, favicon: Option<&[u8]>) -> Vec<u8> {
-    let (r, g, b) = match light {
-        Light::Green => (0x3f, 0xb9, 0x50),
-        Light::Amber => (0xe3, 0xa0, 0x08),
-        Light::Red => (0xe0, 0x4f, 0x4f),
+    let color = match light {
+        Light::Green => [0x3f, 0xb9, 0x50],
+        Light::Amber => [0xe3, 0xa0, 0x08],
+        Light::Red => [0xe0, 0x4f, 0x4f],
     };
-    let n = 32u32;
-    let mut px = favicon.map_or_else(|| vec![0; (n * n * 4) as usize], |p| p.to_vec());
-    for y in 0..n {
-        for x in 0..n {
+    let mut px = vec![0; 32 * 32 * 4];
+    if let Some(logo) = favicon {
+        for y in 0..26 { px[y * 32 * 4..(y * 32 + 26) * 4].copy_from_slice(&logo[y * 26 * 4..(y + 1) * 26 * 4]); }
+    }
+    for y in 0..32 {
+        for x in 0..32 {
             let composed = favicon.is_some();
-            let center = if composed { 24.5 } else { 15.5 };
-            let radius = if composed { 6.5 } else { 14.5 };
-            let (dx, dy) = (x as f32 - center, y as f32 - center);
+            let center = if composed { 23.0 } else { 16.0 };
+            let radius = if composed { 9.0 } else { 14.0 };
+            let (dx, dy) = (x as f64 + 0.5 - center, y as f64 + 0.5 - center);
             let d = (dx * dx + dy * dy).sqrt();
-            let a = (radius - d).clamp(0.0, 1.0);
-            let inner = (radius - if composed { 1.5 } else { 3.0 } - d).clamp(0.0, 1.0);
-            let color = [r, g, b];
-            let i = ((y * n + x) * 4) as usize;
-            let old_a = px[i + 3] as f32 / 255.0;
+            let a = (radius + 0.5 - d).clamp(0.0, 1.0);
+            let i = (y * 32 + x) * 4;
+            let gap = if composed { (d - radius - 1.5).clamp(0.0, 1.0) } else { 1.0 };
+            let old_a = px[i + 3] as f64 / 255.0 * gap;
             let out_a = a + old_a * (1.0 - a);
             if out_a > 0.0 {
                 for c in 0..3 {
-                    let ring = if composed { 24.0 } else { color[c] as f32 / 2.0 };
-                    let value = ring + (color[c] as f32 - ring) * inner;
-                    px[i + c] = ((value * a + px[i + c] as f32 * old_a * (1.0 - a)) / out_a).round() as u8;
+                    px[i + c] = ((color[c] as f64 * a + px[i + c] as f64 * old_a * (1.0 - a)) / out_a).round() as u8;
                 }
-                px[i + 3] = (out_a * 255.0).round() as u8;
             }
+            px[i + 3] = (out_a * 255.0).round() as u8;
         }
     }
     px
 }
 
-fn load_favicon(dir: &Path) -> Option<Vec<u8>> {
-    let file = File::open(dir.join("client/favicon-32x32.png")).ok()?;
-    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+fn read_png(path: &Path) -> Option<(Vec<u8>, usize, usize)> {
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(File::open(path).ok()?));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().ok()?;
-    if reader.info().width != 32 || reader.info().height != 32 {
-        return None;
-    }
     let mut buffer = vec![0; reader.output_buffer_size()?];
     let info = reader.next_frame(&mut buffer).ok()?;
     let channels = match info.color_type {
@@ -471,7 +492,7 @@ fn load_favicon(dir: &Path) -> Option<Vec<u8>> {
         png::ColorType::Grayscale => 1,
         png::ColorType::Indexed => return None,
     };
-    let mut rgba = Vec::with_capacity(32 * 32 * 4);
+    let mut rgba = Vec::with_capacity(info.width as usize * info.height as usize * 4);
     for pixel in buffer[..info.buffer_size()].chunks_exact(channels) {
         match channels {
             4 => rgba.extend_from_slice(pixel),
@@ -480,32 +501,77 @@ fn load_favicon(dir: &Path) -> Option<Vec<u8>> {
             _ => rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], 255]),
         }
     }
-    Some(rgba)
+    Some((rgba, info.width as usize, info.height as usize))
+}
+
+fn load_favicon(dir: &Path) -> Option<Vec<u8>> {
+    let client = dir.join("client");
+    let mut folders = vec![client.clone()];
+    let mut best = None;
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = fs::read_dir(folder) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() { folders.push(path); continue; }
+            if path.extension().is_none_or(|ext| ext != "png") { continue; }
+            let Some((rgba, w, h)) = read_png(&path) else { continue };
+            if w != h || w <= 32 { continue; }
+            let corners = [0, w - 1, (h - 1) * w, h * w - 1];
+            if corners.iter().all(|i| rgba[i * 4 + 3] == 0) && best.as_ref().is_none_or(|(_, size)| w > *size) {
+                best = Some((rgba, w));
+            }
+        }
+    }
+    if let Some((rgba, size)) = best { return Some(area_resize(&rgba, size, size, 26)); }
+    let (rgba, w, h) = read_png(&client.join("favicon-32x32.png"))?;
+    Some(area_resize(&rgba, w, h, 26))
+}
+
+fn write_icon_png(path: &Path, pixels: &[u8], width: usize, height: usize, scale: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let mut scaled = Vec::with_capacity(width * height * scale * scale * 4);
+    for y in 0..height * scale {
+        for x in 0..width * scale {
+            let i = ((y / scale) * width + x / scale) * 4;
+            scaled.extend_from_slice(&pixels[i..i + 4]);
+        }
+    }
+    let mut encoder = png::Encoder::new(File::create(path)?, (width * scale) as u32, (height * scale) as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.write_header()?.write_image_data(&scaled)?;
+    Ok(())
 }
 
 fn icon_preview(out: &Path) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(out)?;
     let favicon = newest_installed().and_then(|v| load_favicon(&version_dir(&v)));
-    for (name, light, base) in [
+    let mut sheet = vec![0; 176 * 80 * 4];
+    for (row, background) in [0x20, 0xf3].into_iter().enumerate() {
+        for pixel in sheet[row * 40 * 176 * 4..(row + 1) * 40 * 176 * 4].chunks_exact_mut(4) { pixel.copy_from_slice(&[background, background, background, 255]); }
+    }
+    for (column, (name, light, base)) in [
         ("green", Light::Green, favicon.as_deref()),
         ("amber", Light::Amber, favicon.as_deref()),
         ("red", Light::Red, favicon.as_deref()),
         ("fallback", Light::Green, None),
-    ] {
+    ].into_iter().enumerate() {
         let pixels = icon_pixels(light, base);
-        let mut scaled = Vec::with_capacity(256 * 256 * 4);
-        for y in 0..256 {
-            for x in 0..256 {
-                let i = ((y / 8) * 32 + x / 8) * 4;
-                scaled.extend_from_slice(&pixels[i..i + 4]);
+        write_icon_png(&out.join(format!("{name}.png")), &pixels, 32, 32, 8)?;
+        for (row, background) in [0x20, 0xf3].into_iter().enumerate() {
+            for (size, offset) in [(16, 2), (24, 18)] {
+                let small = area_resize(&pixels, 32, 32, size);
+                for y in 0..size {
+                    for x in 0..size {
+                        let src = (y * size + x) * 4;
+                        let dst = ((row * 40 + (40 - size) / 2 + y) * 176 + column * 44 + offset + x) * 4;
+                        let alpha = small[src + 3] as f64 / 255.0;
+                        for c in 0..3 { sheet[dst + c] = (small[src + c] as f64 * alpha + background as f64 * (1.0 - alpha)).round() as u8; }
+                    }
+                }
             }
         }
-        let mut encoder = png::Encoder::new(File::create(out.join(format!("{name}.png")))?, 256, 256);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.write_header()?.write_image_data(&scaled)?;
     }
-    Ok(())
+    write_icon_png(&out.join("sheet.png"), &sheet, 176, 80, 4)
 }
 
 enum Msg {
