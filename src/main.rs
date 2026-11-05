@@ -67,7 +67,7 @@ fn log(msg: &str) {
 // Global, not Local: Local names are per session, and SSH runs in a different session
 // from the desktop where the tray lives. The user name keeps two users apart.
 fn object_name(what: &str) -> Vec<u16> {
-    let user = std::env::var("USERNAME").unwrap_or_default();
+    let user = std::env::var("USERNAME").unwrap_or_default().to_lowercase();
     wide(&format!("Global\\t3tray-{user}-{what}"))
 }
 
