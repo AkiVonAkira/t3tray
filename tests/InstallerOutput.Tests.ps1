@@ -44,6 +44,6 @@ Write-T3TrayInstallSummary $config -NoStart $true
 '@
         ($lines -join "`n") | Should -Not -Match 'running'
         ($lines -join "`n") | Should -Match 'Not started'
-        ($lines -join "`n") | Should -Match '--port 4000'
+        ($lines -join "`n") | Should -Match 't3tray\.exe" run --host 0\.0\.0\.0 --port 4000'
     }
 }

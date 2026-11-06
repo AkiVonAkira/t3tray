@@ -4,9 +4,11 @@
 // not the CLI inside the desktop app, so the desktop app's own updater can replace its
 // install folder while the server runs. Upstream's service launcher owns server updates.
 //
-//   t3tray.exe [--host H] [--port P] [--base-dir D] [--channel stable|nightly]  run the tray (one per user session)
+//   t3tray.exe                                 print help
+//   t3tray.exe run [--host H] [--port P] [--base-dir D] [--channel stable|nightly]  run the tray (one per user session)
 //   t3tray.exe status [--json]                print the running tray's state
-//   t3tray.exe restart|stop|start|quit signal the running tray
+//   t3tray.exe restart|stop|start|quit        signal the running tray
+//   t3tray.exe update [--version vX.Y.Z]      update t3tray through the release installer
 //
 // Logs and tray state live in %USERPROFILE%\.t3tray; runtimes live in .t3\runtime.
 #![windows_subsystem = "windows"]
@@ -22,8 +24,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 use t3tray::channel::Channel;
-use t3tray::status::{
-    format_status, local_host, not_running_json, parse_status_args, StatusFormat,
+use t3tray::cli::{self, Command as Cli, RunOptions, Signal};
+use t3tray::status::{format_status, local_host, not_running_json, StatusFormat};
+use t3tray::update::{
+    checksum, installed_settings, installer_args, release_tag, target_tag, RELEASES,
 };
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -33,11 +37,11 @@ use windows_sys::Win32::System::Console::*;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
 use windows_sys::Win32::System::Environment::*;
 use windows_sys::Win32::System::JobObjects::*;
+use windows_sys::Win32::System::Registry::*;
 use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const REPO: &str = "pingdotgg/t3code";
-const COMMANDS: [&str; 4] = ["restart", "stop", "start", "quit"];
 // `t3 serve` exits 78 while the desktop app owns the T3 home; retry slowly then.
 const EXIT_STATE_DIR_OWNED: i32 = 78;
 const UPDATE_EVERY: Duration = Duration::from_secs(600);
@@ -87,14 +91,7 @@ fn event_name(cmd: &str) -> Vec<u16> {
 
 // ---------- CLI side ----------
 
-fn status(args: &[String]) -> i32 {
-    let format = match parse_status_args(args) {
-        Ok(format) => format,
-        Err(usage) => {
-            eprintln!("{usage}");
-            return 2;
-        }
-    };
+fn status(format: StatusFormat) -> i32 {
     let state = fs::read_to_string(root().join("state.json"))
         .ok()
         .filter(|_| tray_running())
@@ -114,18 +111,8 @@ fn status(args: &[String]) -> i32 {
     0
 }
 
-fn cli(cmd: &str, args: &[String]) -> i32 {
-    unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
-    if cmd == "status" {
-        return status(args);
-    }
-    if !COMMANDS.contains(&cmd) || !args.is_empty() {
-        println!(
-            "usage: t3tray [--host H] [--port P] [--base-dir D] [--channel stable|nightly] | status [--json] | {}",
-            COMMANDS.join(" | ")
-        );
-        return 2;
-    }
+fn signal(signal: Signal) -> i32 {
+    let cmd = signal.as_str();
     let name = event_name(cmd);
     let h = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
     if h.is_null() {
@@ -169,6 +156,174 @@ fn cli(cmd: &str, args: &[String]) -> i32 {
     }
     println!("signalled {cmd}");
     0
+}
+
+// ---------- self-update ----------
+
+fn sign_in_entry() -> Result<Option<String>, String> {
+    let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Run");
+    let name = wide("T3Tray");
+    let read = |buf: *mut std::ffi::c_void, size: &mut u32| unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf,
+            size,
+        )
+    };
+    let mut size = 0u32;
+    match read(std::ptr::null_mut(), &mut size) {
+        ERROR_SUCCESS => {}
+        ERROR_FILE_NOT_FOUND => return Ok(None),
+        code => {
+            return Err(format!(
+                "could not read the T3Tray sign-in entry (error {code})"
+            ))
+        }
+    }
+    let mut value = vec![0u16; size as usize / 2 + 1];
+    size = (value.len() * 2) as u32;
+    match read(value.as_mut_ptr().cast(), &mut size) {
+        ERROR_SUCCESS => {}
+        code => {
+            return Err(format!(
+                "could not read the T3Tray sign-in entry (error {code})"
+            ))
+        }
+    }
+    let len = value.iter().position(|&c| c == 0).unwrap_or(value.len());
+    Ok(Some(String::from_utf16_lossy(&value[..len])))
+}
+
+fn fetch(url: &str) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    ureq::get(url)
+        .set("User-Agent", "t3tray")
+        .call()
+        .map_err(|e| e.to_string())?
+        .into_reader()
+        .take(64 * 1024 * 1024)
+        .read_to_end(&mut body)
+        .map_err(|e| format!("{url}: {e}"))?;
+    Ok(body)
+}
+
+// CI's update journey builds with this feature and serves fixture releases over
+// local HTTP. Release builds have no way to change where updates come from.
+fn releases() -> String {
+    #[cfg(feature = "fixture-releases")]
+    if let Ok(url) = std::env::var("T3TRAY_FIXTURE_RELEASES") {
+        return url;
+    }
+    RELEASES.to_owned()
+}
+
+fn latest_tag() -> Result<String, String> {
+    let url = format!("{}/latest", releases());
+    let response = ureq::AgentBuilder::new()
+        .redirects(0)
+        .build()
+        .get(&url)
+        .set("User-Agent", "t3tray")
+        .call()
+        .map_err(|e| e.to_string())?;
+    let location = response.header("location").unwrap_or_default();
+    release_tag(location)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{url} did not name a release"))
+}
+
+// The release installer replaces this executable. It renames the running file
+// first, so this process can wait for it and report its exit code.
+fn run_installer(tag: &str, dir: &Path, args: &[String]) -> Result<i32, String> {
+    let base = format!("{}/download/{tag}", releases());
+    let sums = String::from_utf8(fetch(&format!("{base}/SHA256SUMS"))?)
+        .map_err(|_| "SHA256SUMS is not text".to_owned())?;
+    let installer = fetch(&format!("{base}/install.ps1"))?;
+    let want = checksum(&sums, "install.ps1").ok_or("SHA256SUMS has no install.ps1 entry")?;
+    let got: String = Sha256::digest(&installer)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if !got.eq_ignore_ascii_case(want) {
+        return Err(format!(
+            "install.ps1 SHA-256 {got} does not match SHA256SUMS {want}"
+        ));
+    }
+    let write = |name: &str, bytes: &[u8]| {
+        fs::write(dir.join(name), bytes).map_err(|e| format!("{name}: {e}"))
+    };
+    write("install.ps1", &installer)?;
+    write("SHA256SUMS", sums.as_bytes())?;
+    write("t3tray.exe", &fetch(&format!("{base}/t3tray.exe"))?)?;
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(dir.join("install.ps1"))
+        .arg("-AssetDir")
+        .arg(dir)
+        .args(args)
+        .status()
+        .map_err(|e| format!("could not start powershell.exe: {e}"))?;
+    Ok(status.code().unwrap_or(1))
+}
+
+fn update(version: Option<&str>) -> i32 {
+    let current = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let running = tray_running();
+    let state = fs::read_to_string(root().join("state.json"))
+        .ok()
+        .filter(|_| running)
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    let plan = sign_in_entry()
+        .and_then(|entry| installed_settings(entry.as_deref(), state.as_ref()))
+        .and_then(|installed| {
+            let tag = target_tag(version, &current, latest_tag)?;
+            Ok((installer_args(&installed, running), tag))
+        });
+    let (args, tag) = match plan {
+        Ok((_, None)) => {
+            println!("t3tray {current} is the latest release.");
+            return 0;
+        }
+        Ok((args, Some(tag))) => (args, tag),
+        Err(e) => {
+            eprintln!("Update failed: {e}. Nothing was changed.");
+            return 1;
+        }
+    };
+    println!("Updating t3tray {current} to {tag}.");
+    if running {
+        println!("The tray and its server restart. Active agent turns stop.");
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "t3tray-update-{}-{}",
+        std::process::id(),
+        now_unix()
+    ));
+    let result = fs::create_dir_all(&dir)
+        .map_err(|e| e.to_string())
+        .and_then(|_| run_installer(&tag, &dir, &args));
+    let _ = fs::remove_dir_all(&dir);
+    match result {
+        Ok(0) => 0,
+        Ok(code) => {
+            eprintln!("Update failed: the installer exited with code {code}. Fix the error above, then run t3tray update again.");
+            code
+        }
+        Err(e) => {
+            eprintln!("Update failed: {e}. Nothing was changed.");
+            1
+        }
+    }
 }
 
 fn read_state_field(key: &str) -> Option<String> {
@@ -406,7 +561,10 @@ fn download(base_dir: &Path, v: &str) -> Result<(), String> {
         .and_then(|l| l.split_whitespace().next())
         .ok_or(format!("{name}.zip not in SHA256SUMS"))?
         .to_lowercase();
-    let tmp = root().join(format!("seed-{v}-{}-{}", std::process::id(), now_unix()));
+    let tmp =
+        base_dir
+            .join("runtime")
+            .join(format!("seed-{v}-{}-{}", std::process::id(), now_unix()));
     fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let zip_path = tmp.join("server.zip");
     let mut reader = ureq::get(&format!("{base}/{name}.zip"))
@@ -1014,6 +1172,7 @@ impl App {
             "trayPid": std::process::id(),
             "host": self.host,
             "port": self.port,
+            "baseDir": self.base_dir,
             "startedAt": self.started_at,
             "lastExit": self.last_exit,
             "serviceState": service_home(self.base_dir.as_deref()).join("runtime").join("service-state.json"),
@@ -1106,54 +1265,65 @@ impl Ui {
     }
 }
 
-fn arg_value(args: &[String], flag: &str) -> Option<String> {
-    args.iter()
-        .position(|a| a == flag)
-        .and_then(|i| args.get(i + 1))
-        .cloned()
-}
-
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|a| a == "icon-preview") {
-        let result = args
-            .get(1)
-            .ok_or("usage: t3tray icon-preview <outdir>")
-            .map_err(|e| e.into())
-            .and_then(|out| icon_preview(Path::new(out)));
-        if let Err(e) = result {
-            eprintln!("{e}");
-            std::process::exit(1);
+    let command = cli::parse(&args);
+    if !matches!(command, Ok(Cli::Run(_))) {
+        unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
+    }
+    let code = match command {
+        Ok(Cli::Run(options)) => {
+            run_tray(options);
+            0
         }
-        return;
-    }
-    if let Some(cmd) = args.first().filter(|a| !a.starts_with("--")) {
-        std::process::exit(cli(cmd, &args[1..]));
-    }
-    let channel = match Channel::from_args(&args) {
-        Ok(channel) => channel,
+        Ok(Cli::Help) => {
+            println!("{}", cli::help());
+            0
+        }
+        Ok(Cli::Status(format)) => status(format),
+        Ok(Cli::Signal(s)) => signal(s),
+        Ok(Cli::Update { version }) => update(version.as_deref()),
+        Ok(Cli::IconPreview(dir)) => match icon_preview(Path::new(&dir)) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("{e}");
+                1
+            }
+        },
         Err(error) => {
-            unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
-            eprintln!("{error}");
-            log(&error);
-            std::process::exit(2);
+            if args
+                .first()
+                .is_some_and(|a| a == "run" || a.starts_with("--"))
+            {
+                log(&format!("tray not started: {error}"));
+            }
+            eprintln!(
+                "{error}
+Run t3tray help for usage."
+            );
+            2
         }
     };
-    let host = arg_value(&args, "--host").unwrap_or_else(|| "127.0.0.1".into());
-    let port: u16 = arg_value(&args, "--port")
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(3773);
+    std::process::exit(code);
+}
 
+fn run_tray(options: RunOptions) {
+    let RunOptions {
+        host,
+        port,
+        base_dir,
+        channel,
+    } = options;
     let mutex_name = object_name("instance");
     let _mutex = unsafe { CreateMutexW(std::ptr::null(), 1, mutex_name.as_ptr()) };
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         return;
     }
-    let events: Vec<(&str, HANDLE)> = COMMANDS
+    let events: Vec<(&str, HANDLE)> = Signal::ALL
         .iter()
-        .map(|c| {
-            (*c, unsafe {
-                CreateEventW(std::ptr::null(), 0, 0, event_name(c).as_ptr())
+        .map(|s| {
+            (s.as_str(), unsafe {
+                CreateEventW(std::ptr::null(), 0, 0, event_name(s.as_str()).as_ptr())
             })
         })
         .collect();
@@ -1166,7 +1336,7 @@ fn main() {
         channel,
         host,
         port,
-        base_dir: arg_value(&args, "--base-dir"),
+        base_dir,
         server: None,
         want_running: true,
         next_start: Instant::now(),

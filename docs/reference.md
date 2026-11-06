@@ -16,8 +16,9 @@ Download the installer to pass parameters, or invoke its text as a scriptblock:
 | `-Port` | `3773` | Selects a TCP port from 1 to 65535. |
 | `-ExePath` | Download | Uses a local executable with `SHA256SUMS` beside it. |
 | `-AssetDir` | Download | Uses `t3tray.exe` and `SHA256SUMS` in a local directory. Cannot be combined with `-ExePath`. |
+| `-BaseDir` | `%USERPROFILE%\.t3` | Selects the server's T3 home. Use a folder, not a drive root. |
 | `-NoStart` | Off | Installs and configures startup without starting the tray now. |
-| `-RetireWinT3Service` | Off | Stops the old user service, disables its logon task, and removes `t3service.cmd`. Keeps its data. |
+| `-NoStartAtSignIn` | Off | Removes the sign-in entry instead of setting it. |
 | `-NonInteractive` | Off | Skips the keyboard wizard. |
 | `-DryRun` | Off | Shows the plan without installing or verifying a running server. |
 
@@ -44,19 +45,24 @@ session and revokes it afterward.
 
 | Command | Result |
 | --- | --- |
+| `t3tray` or `t3tray help` | Lists the commands and run options. Does not start the tray. |
 | `t3tray status` | Readable status, connection address, and diagnostic paths. |
 | `t3tray status --json` | Machine-readable tray state. |
 | `t3tray start` | Starts the server and waits up to 60 seconds for readiness. |
 | `t3tray restart` | Restarts the server and waits up to 60 seconds for readiness. |
 | `t3tray stop` | Stops the server and leaves the tray open. |
 | `t3tray quit` | Closes the tray and its server tree. |
+| `t3tray update [--version vX.Y.Z]` | Updates t3tray through the release installer and keeps its settings. |
+| `t3tray run [options]` | Runs the tray. The sign-in entry uses this. |
 
 An absent tray exits with code 3. Invalid command usage exits with code 2.
-Wait for active agent turns to finish before stop, restart, quit, or reinstall.
+Wait for active agent turns to finish before stop, restart, quit, or update.
 
-Launch the executable without a command to open the tray. Its flags are
-`--host`, `--port`, `--base-dir`, and `--channel stable|nightly`.
+`run` takes `--host`, `--port`, `--base-dir`, and `--channel stable|nightly`.
+It rejects unknown options and invalid values instead of using defaults.
 `--base-dir` selects the server's T3 home; tray state and logs stay in `.t3tray`.
+A command line that starts with one of these flags also runs the tray, so sign-in
+entries written by v0.1 keep working.
 `icon-preview <directory>` writes icon PNGs for maintainers.
 
 ## Files and startup
@@ -90,7 +96,24 @@ seed at startup and every ten minutes without selecting a newer version.
 T3 Code's **Update machines** dialog owns server updates through upstream's
 launcher, including update trials, database backups, rollback, and runtime
 pruning. Updating the desktop app does not select a new server version.
-Re-running the installer updates t3tray itself. `-Version` selects t3tray;
+
+`t3tray update` updates t3tray itself:
+
+1. It reads the settings from the `T3Tray` sign-in entry. Without that entry it
+   uses the running tray's state and keeps sign-in startup off.
+2. It resolves the latest release, or the `--version` release, which must be
+   v0.2.0 or newer. If the latest release is already installed, it stops.
+3. It downloads `install.ps1`, `SHA256SUMS`, and `t3tray.exe` from that release
+   and checks `install.ps1` against `SHA256SUMS`. The installer checks `t3tray.exe`.
+4. It runs the installer unattended with the saved channel, address, port, T3 home,
+   and sign-in setting. A stopped tray stays stopped.
+
+The installer renames the running `t3tray.exe` to `t3tray.<id>.old` before copying
+the new one, and removes old copies on the next install or uninstall. It does not
+stop the `t3tray update` process that started it. The command exits with the
+installer's exit code. Errors before the installer starts change nothing.
+
+Re-running the installer also updates t3tray. `-Version` selects t3tray;
 `-Channel` selects the initial upstream server. They are independent.
 
 ## Build and release

@@ -9,8 +9,8 @@ param(
     [string]$Channel = $(if ($env:T3TRAY_CHANNEL) { $env:T3TRAY_CHANNEL } else { 'stable' }),
     [string]$ExePath,
     [string]$AssetDir,
+    [string]$BaseDir,
     [switch]$NoStart,
-    [switch]$RetireWinT3Service,
     [bool]$StartAtSignIn = $true,
     [switch]$ShowSteps
 )
@@ -66,7 +66,9 @@ try {
     if ($ExePath -eq $exe) { throw 'Source executable must be outside the install directory.' }
 
     Write-InstallStep 'Stop and replace tray'
-    $running = @(Get-Process -Name t3tray -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
+    # t3tray update starts this installer and waits for it; leave that process running.
+    $updater = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -Property ParentProcessId).ParentProcessId
+    $running = @(Get-Process -Name t3tray -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe -and $_.Id -ne $updater })
     if ($running.Count -gt 0) {
         $null = Invoke-InstallCommand { & $exe quit }
         $running | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue
@@ -74,27 +76,14 @@ try {
         $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
     }
     $null = New-Item -ItemType Directory -Force -Path $trayDir, $binDir
-    Copy-Item -LiteralPath $ExePath -Destination $exe -Force
-    if ($RetireWinT3Service) {
-        Write-InstallStep 'Retire win-t3service'
-        $oldTask = 'T3 Code Server (User Logon)'
-        if ((Invoke-InstallCommand { & schtasks.exe /Query /TN $oldTask }).ExitCode -eq 0) {
-            $oldService = Join-Path $env:USERPROFILE '.t3service\t3service.ps1'
-            if (Test-Path -LiteralPath $oldService) {
-                $result = Invoke-InstallCommand { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $oldService stop }
-                if ($result.ExitCode -ne 0) { throw "The previous service did not stop. $($result.Output)" }
-            }
-            $result = Invoke-InstallCommand { & schtasks.exe /Change /TN $oldTask /DISABLE }
-            if ($result.ExitCode -ne 0) { throw "Could not disable the previous service task. $($result.Output)" }
-        }
-        Remove-Item -LiteralPath (Join-Path $binDir 't3service.cmd') -ErrorAction SilentlyContinue
-    }
+    Install-T3TrayExecutable $ExePath $exe
     Write-InstallStep 'Write command wrapper'
     # Piping makes PowerShell wait for the GUI executable and forward its output.
     "@echo off`r`npowershell.exe -NoLogo -NoProfile -Command `"& (Join-Path `$env:USERPROFILE '.t3tray\t3tray.exe') %* | ForEach-Object { `$_ }; exit `$LASTEXITCODE`"`r`nexit /b %ERRORLEVEL%" |
         Set-Content -LiteralPath (Join-Path $binDir 't3tray.cmd') -Encoding ascii
     Write-InstallStep 'Configure sign-in startup'
-    $runArgs = "--host $ListenHost --port $Port --channel $($Channel.ToLowerInvariant())"
+    $runArgs = "run --host $ListenHost --port $Port --channel $($Channel.ToLowerInvariant())"
+    if ($BaseDir) { $runArgs += " --base-dir `"$BaseDir`"" }
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     if (-not (Test-Path -LiteralPath $runKey)) { $null = New-Item -Path $runKey }
     if ($StartAtSignIn) {

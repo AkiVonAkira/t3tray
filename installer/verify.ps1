@@ -1,12 +1,12 @@
 ﻿function Get-T3TrayServerConfig {
-    param([int]$Port)
+    param([int]$Port, [string]$BaseDir)
     $socket = New-Object Net.WebSockets.ClientWebSocket
     $timeout = New-Object Threading.CancellationTokenSource
     $timeout.CancelAfter(15000)
     $session = $null
     $runtimeExe = $null
     try {
-        $baseDir = Join-Path $env:USERPROFILE '.t3'
+        $baseDir = if ($BaseDir) { $BaseDir } else { Join-Path $env:USERPROFILE '.t3' }
         $state = Get-Content (Join-Path $baseDir 'runtime/service-state.json') -Raw | ConvertFrom-Json
         if ($state.activeVersion -notmatch '^[0-9][a-zA-Z0-9.+-]*$') { throw 'Invalid active runtime version.' }
         $runtimeExe = Join-Path $baseDir "runtime/versions/$($state.activeVersion)/t3.exe"
@@ -73,7 +73,7 @@ function Invoke-T3TrayVerification {
         if ($response.StatusCode -ne 200) { throw 'Server did not return HTTP 200.' }
     }
     Invoke-T3TrayStep 'server.getConfig' {
-        $server = Get-T3TrayServerConfig $Config.Port
+        $server = Get-T3TrayServerConfig -Port $Config.Port -BaseDir $Config.BaseDir
         if ($server.environment.capabilities.serverSelfUpdate -ne 'boot-service') { throw 'Expected serverSelfUpdate=boot-service.' }
     }
 }

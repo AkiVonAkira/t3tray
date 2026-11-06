@@ -30,14 +30,13 @@ Add-PreviewKey ([ConsoleKey]::Escape) $enter            # port: esc goes back to
 Add-PreviewKey '4' ([ConsoleKey]::Backspace) 'x' '0' $enter
 Add-PreviewKey ([ConsoleKey]::Home) '4' ([ConsoleKey]::End) '00' $enter
 Add-PreviewKey $enter                                   # start at sign-in: yes
-Add-PreviewKey ([ConsoleKey]::UpArrow) $enter           # retire: yes
 Add-PreviewKey $enter                                   # review: install
 
-$detection = [pscustomobject]@{ Config = (New-T3TrayConfig); Installed = $false; RunValue = ''; OldTask = $true
+$detection = [pscustomobject]@{ Config = (New-T3TrayConfig); Installed = $false; RunValue = ''
     Desktop = '0.0.20-nightly.20261101.4 (nightly)'; DesktopChannel = 'nightly'; PortOwner = 'Available' }
 $config = Invoke-T3TrayWizard $detection
 if ($script:keys.Count) { throw "$($script:keys.Count) scripted keys were not read." }
-if ($config.Channel -ne 'nightly' -or $config.ListenHost -ne '0.0.0.0' -or -not $config.Firewall -or $config.Port -ne 4000 -or -not $config.Retire) {
+if ($config.Channel -ne 'nightly' -or $config.ListenHost -ne '0.0.0.0' -or -not $config.Firewall -or $config.Port -ne 4000 -or -not $config.StartAtSignIn) {
     throw "Wizard returned the wrong configuration: $($config | ConvertTo-Json -Compress)"
 }
 

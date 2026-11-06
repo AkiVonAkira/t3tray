@@ -184,6 +184,7 @@ function Get-T3TrayReview {
         Port = if ($PortOwner) { "$($Config.Port) ($PortOwner)" } else { [string]$Config.Port }
         'Local URL' = Get-T3TrayLocalUrl $Config.ListenHost $Config.Port
         'Start at sign-in' = if ($Config.StartAtSignIn) { 'Yes' } else { 'No' } }
+    if ($Config.BaseDir) { $settings['T3 home'] = $Config.BaseDir }
     "$($s.Warm)Settings$($s.Reset)"
     Format-T3TrayTable $settings '  '
     foreach ($group in @(Get-T3TrayPlanStep $Config $NoStart | Group-Object Group)) {
@@ -204,7 +205,7 @@ function Invoke-T3TrayWizard {
             'Check' {
                 $choice = Read-T3TrayChoice 'check' @('Configure and install') 0 @(Format-T3TrayTable ([ordered]@{
                     'Existing t3tray install' = $Detection.Installed; 'Run value' = $Detection.RunValue
-                    'win-t3service task' = $Detection.OldTask; 'T3 desktop' = $Detection.Desktop
+                    'T3 desktop' = $Detection.Desktop
                     "Port $($config.Port)" = $Detection.PortOwner }))
                 if ($choice -ge 0) { $step = 'Channel' }
             }
@@ -240,18 +241,14 @@ function Invoke-T3TrayWizard {
                 $choice = Read-T3TrayChoice 'start at sign-in' @('Yes', 'No') ([int](-not $config.StartAtSignIn))
                 if ($choice -lt 0) { $step = 'Port' } else {
                     $config.StartAtSignIn = $choice -eq 0
-                    $step = if ($Detection.OldTask) { 'Retire' } else { 'Review' }
+                    $step = 'Review'
                 }
-            }
-            'Retire' {
-                $choice = Read-T3TrayChoice 'retire win-t3service' @('Yes, stop and disable the old service', 'No, keep it') ([int](-not $config.Retire))
-                if ($choice -lt 0) { $step = 'Startup' } else { $config.Retire = $choice -eq 0; $step = 'Review' }
             }
             'Review' {
                 $owner = Get-T3TrayPortOwner $config.Port
                 $choice = Read-T3TrayChoice 'review' @('Install', 'Go back') 0 @(Get-T3TrayReview $config $owner)
-                if ($choice -ne 0) { $step = if ($Detection.OldTask) { 'Retire' } else { 'Startup' } }
-                else { return (New-T3TrayConfig -Channel $config.Channel -ListenHost $config.ListenHost -Port $config.Port -StartAtSignIn $config.StartAtSignIn -Firewall $config.Firewall -Retire $config.Retire) }
+                if ($choice -ne 0) { $step = 'Startup' }
+                else { return (New-T3TrayConfig -Channel $config.Channel -ListenHost $config.ListenHost -Port $config.Port -BaseDir $config.BaseDir -StartAtSignIn $config.StartAtSignIn -Firewall $config.Firewall) }
             }
         }
     }
@@ -303,7 +300,9 @@ function Write-T3TrayInstallSummary {
     $trayDir = Join-Path $env:USERPROFILE '.t3tray'
     if ($NoStart) {
         $title = 'Installed. Not started because -NoStart was set.'
-        $rows = [ordered]@{ Start = "& `"$(Join-Path $trayDir 't3tray.exe')`" --host $($Config.ListenHost) --port $($Config.Port) --channel $($Config.Channel)" }
+        $start = "& `"$(Join-Path $trayDir 't3tray.exe')`" run --host $($Config.ListenHost) --port $($Config.Port) --channel $($Config.Channel)"
+        if ($Config.BaseDir) { $start += " --base-dir `"$($Config.BaseDir)`"" }
+        $rows = [ordered]@{ Start = $start }
     } else {
         $title = if ($Verified) { 'Installed and verified. t3tray is running.' } else { 'Installed. t3tray is running.' }
         $rows = [ordered]@{ Open = Get-T3TrayLocalUrl $Config.ListenHost $Config.Port; Status = Get-T3TrayStatusCommand }

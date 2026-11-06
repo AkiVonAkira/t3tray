@@ -10,8 +10,9 @@ param(
     [string]$Channel = $(if ($env:T3TRAY_CHANNEL) { $env:T3TRAY_CHANNEL } else { 'stable' }),
     [string]$ExePath,
     [string]$AssetDir,
+    [string]$BaseDir,
     [switch]$NoStart,
-    [switch]$RetireWinT3Service,
+    [switch]$NoStartAtSignIn,
     [switch]$NonInteractive,
     [switch]$DryRun
 )
@@ -30,19 +31,14 @@ foreach ($name in @('config.ps1', 'ui.ps1', 'verify.ps1')) {
     else { . ([scriptblock]::Create(([string](Invoke-RestMethod "$sourceBase/$name")).TrimStart([char]0xFEFF))) }
 }
 $interactive = Test-T3TrayInteractive $PSBoundParameters @(Get-ChildItem Env: | Select-Object -ExpandProperty Name)
-$legacyArgs = @{ Version = $Version; ListenHost = $ListenHost; Port = $Port; Channel = $Channel
-    ExePath = $ExePath; AssetDir = $AssetDir; NoStart = $NoStart; RetireWinT3Service = $RetireWinT3Service }
-$config = New-T3TrayConfig -Channel $Channel -ListenHost $ListenHost -Port $Port -Retire $RetireWinT3Service
+$config = New-T3TrayConfig -Channel $Channel -ListenHost $ListenHost -Port $Port -BaseDir $BaseDir -StartAtSignIn (-not $NoStartAtSignIn)
 if ($interactive) {
     try { $config = Invoke-T3TrayWizard (Get-T3TrayDetection) }
     catch { if ($_.Exception.Message -eq 'cancelled') { Write-Host "$([char]0x25A0)  Cancelled. No changes made."; return }; throw }
-    $legacyArgs.ListenHost = $config.ListenHost
-    $legacyArgs.Port = $config.Port
-    $legacyArgs.Channel = $config.Channel
-    $legacyArgs.RetireWinT3Service = $config.Retire
-    $legacyArgs.StartAtSignIn = $config.StartAtSignIn
-    $legacyArgs.ShowSteps = $true
 }
+$legacyArgs = @{ Version = $Version; ListenHost = $config.ListenHost; Port = $config.Port; Channel = $config.Channel
+    BaseDir = $config.BaseDir; StartAtSignIn = $config.StartAtSignIn; ExePath = $ExePath; AssetDir = $AssetDir
+    NoStart = $NoStart; ShowSteps = $interactive }
 if ($DryRun) {
     if ($interactive) {
         Write-T3TrayFrame 'dry-run' @(Get-T3TrayReview $config '' $NoStart) 'No changes made. Verification is planned, not performed.'
@@ -70,5 +66,4 @@ if ($interactive -and $config.Firewall) {
 if ($localHelpers) { & (Join-Path $installerRoot 'installer/legacy-install.ps1') @legacyArgs }
 else { & ([scriptblock]::Create(([string](Invoke-RestMethod "$sourceBase/legacy-install.ps1")).TrimStart([char]0xFEFF))) @legacyArgs }
 if ($interactive -and -not $NoStart) { Invoke-T3TrayVerification $config }
-$summaryConfig = [pscustomobject]@{ ListenHost = $legacyArgs.ListenHost; Port = $legacyArgs.Port; Channel = $legacyArgs.Channel }
-Write-T3TrayInstallSummary $summaryConfig -NoStart $NoStart.IsPresent -Verified $interactive -Framed $interactive
+Write-T3TrayInstallSummary $config -NoStart $NoStart.IsPresent -Verified $interactive -Framed $interactive
