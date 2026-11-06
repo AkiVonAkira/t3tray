@@ -25,13 +25,13 @@ $trayDir = Join-Path $env:USERPROFILE '.t3tray'
 $exe = Join-Path $trayDir 't3tray.exe'
 $binDir = Join-Path $env:USERPROFILE '.t3\bin'
 $temporary = $null
-$currentStep = ''
+$stepState = @{ Label = '' }
 function Write-InstallStep([string]$Label) {
     if ($ShowSteps) {
-        if ($script:currentStep) { Write-T3TrayStep $script:currentStep ok }
+        if ($stepState.Label) { Write-T3TrayStep $stepState.Label ok }
         Write-T3TrayStep $Label running
     }
-    $script:currentStep = $Label
+    $stepState.Label = $Label
 }
 try {
     Write-InstallStep 'Acquire release assets'
@@ -119,14 +119,14 @@ try {
     $deadline = (Get-Date).AddMinutes(10)
     do {
         $state = (& $exe status | Out-String).Trim()
-        if ($state -match '"status":"running"') { Write-Output $state; if ($ShowSteps) { Write-T3TrayStep $currentStep ok }; return }
+        if ($state -match '"status":"running"') { Write-Output $state; if ($ShowSteps) { Write-T3TrayStep $stepState.Label ok }; return }
         Start-Sleep -Seconds 2
     } while ((Get-Date) -lt $deadline)
     throw "t3tray did not report running within 10 minutes. See $trayDir\logs. Last state $state"
 } catch {
     if ($ShowSteps) {
-        Write-T3TrayStep $currentStep failed
-        throw "$currentStep failed. $($_.Exception.Message) Resolve the error and rerun. See $trayDir/logs."
+        Write-T3TrayStep $stepState.Label failed
+        throw "$($stepState.Label) failed. $($_.Exception.Message) Resolve the error and rerun. See $trayDir/logs."
     }
     throw
 } finally {

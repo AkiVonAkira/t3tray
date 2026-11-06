@@ -37,8 +37,7 @@ function Get-T3TrayDetection {
     $result.Installed = Test-Path (Join-Path $env:USERPROFILE '.t3tray\t3tray.exe')
     $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name T3Tray -ErrorAction SilentlyContinue
     if ($run) { $result.RunValue = $run.T3Tray }
-    & schtasks.exe /Query /TN 'T3 Code Server (User Logon)' *> $null
-    $result.OldTask = $LASTEXITCODE -eq 0
+    $result.OldTask = [bool](Get-ScheduledTask -TaskName 'T3 Code Server (User Logon)' -ErrorAction SilentlyContinue)
     $desktopDir = Join-Path $env:LOCALAPPDATA 'Programs\t3code'
     $uninstaller = Get-ChildItem $desktopDir -Filter 'Uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($uninstaller) {
@@ -65,6 +64,7 @@ function Get-T3TrayPortOwner {
 
 function Get-T3TrayPlan {
     param($Config, [bool]$NoStart = $false)
+    if ($Config.Firewall) { "Request UAC to allow TCP $($Config.Port) on Windows Firewall Private profile only" }
     'Download release assets (or use supplied assets)'
     'Verify t3tray.exe SHA-256 before replacing anything'
     'Stop existing tray and copy executable'
@@ -72,7 +72,6 @@ function Get-T3TrayPlan {
     'Write t3tray.cmd wrapper'
     if ($Config.StartAtSignIn) { 'Set T3Tray sign-in Run value' } else { 'Remove T3Tray sign-in Run value' }
     "Arguments --host $($Config.ListenHost) --port $($Config.Port) --channel $($Config.Channel)"
-    if ($Config.Firewall) { "Request UAC to allow TCP $($Config.Port) on Windows Firewall Private profile only" }
     if (-not $NoStart) {
         'Start tray through a temporary interactive scheduled task'
         'Verify tray process and t3tray status running'

@@ -46,6 +46,7 @@ if ($DryRun) {
     return
 }
 if ($env:OS -ne 'Windows_NT') { throw 't3tray requires Windows.' }
+if ($interactive) { Write-T3TrayFrame 'install' @() 'Working. A failed step stops the installer.' }
 if ($interactive -and $config.Firewall) {
     Invoke-T3TrayStep 'Private firewall rule (UAC)' {
         Write-Host "Windows will ask for administrator approval to allow TCP $($config.Port) on Private networks."
