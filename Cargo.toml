@@ -12,6 +12,10 @@ opt-level = "s"
 lto = true
 strip = true
 
+[features]
+# Test-only build for CI; see scripts/smoke.ps1.
+fixture-releases = []
+
 [dependencies]
 serde_json = "1.0.154"
 

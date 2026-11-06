@@ -15,7 +15,7 @@ jobs:
   build:
     name: Rust checks and Windows build
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: sudo apt-get update && sudo apt-get install -y mingw-w64
@@ -28,10 +28,16 @@ jobs:
       - run: cargo build --locked --release --target x86_64-pc-windows-gnu
       - name: Package smoke-test binary
         run: |
-          mkdir dist
+          mkdir -p dist/fixture
           cp target/x86_64-pc-windows-gnu/release/t3tray.exe dist/
-          cd dist
-          sha256sum t3tray.exe > SHA256SUMS
+          (cd dist && sha256sum t3tray.exe > SHA256SUMS)
+      # Test-only updater that reads releases from the smoke script's local fixture server.
+      - name: Package fixture-release updater
+        run: |
+          cargo build --locked --release --target x86_64-pc-windows-gnu --features fixture-releases
+          cp target/x86_64-pc-windows-gnu/release/t3tray.exe dist/fixture/
+          (cd dist/fixture && sha256sum t3tray.exe > SHA256SUMS)
+          ! cmp -s dist/t3tray.exe dist/fixture/t3tray.exe
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-smoke
@@ -42,7 +48,7 @@ jobs:
     name: Installer and real server
     needs: build
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -67,9 +73,9 @@ jobs:
           $env:PSModulePath = "$((Resolve-Path .tools).Path);$env:PSModulePath"
           ./scripts/check.ps1
           ./scripts/cli-smoke.ps1 -ExePath ./dist/t3tray.exe
-      - name: Stable install, status, HTTP, stop/start, and uninstall
+      - name: Stable install in a custom T3 home, self-update, stop/start, and uninstall
         shell: powershell
-        run: ./scripts/smoke.ps1
+        run: ./scripts/smoke.ps1 -BaseDir "$env:RUNNER_TEMP\T3 Home" -UpdaterExePath ./dist/fixture/t3tray.exe
       - name: Nightly compatibility check on manual runs
         if: github.event_name == 'workflow_dispatch'
         shell: powershell

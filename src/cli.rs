@@ -161,20 +161,27 @@ fn self_updating(version: &str) -> bool {
     matches!((parts.next(), parts.next()), (Some(Ok(major)), Some(Ok(minor))) if (major, minor) >= (0, 2))
 }
 
+/// Checks a release tag the same way whether the user named it or GitHub
+/// reported it as latest, and returns it as `vX.Y.Z`.
+pub fn update_tag(version: &str) -> Result<String, String> {
+    if !valid_release(version) {
+        return Err(format!("invalid release version {version:?}"));
+    }
+    let version = version.trim_start_matches('v');
+    if !self_updating(version) {
+        return Err(format!(
+            "t3tray update installs v0.2.0 or newer; run the v{version} installer instead"
+        ));
+    }
+    Ok(format!("v{version}"))
+}
+
 fn parse_update(args: &[String]) -> Result<Command, String> {
     match args {
         [] => Ok(Command::Update { version: None }),
-        [flag, version] if flag == "--version" && valid_release(version) => {
-            let version = version.trim_start_matches('v');
-            if !self_updating(version) {
-                return Err(format!(
-                    "t3tray update installs v0.2.0 or newer; run the v{version} installer instead"
-                ));
-            }
-            Ok(Command::Update {
-                version: Some(format!("v{version}")),
-            })
-        }
+        [flag, version] if flag == "--version" => Ok(Command::Update {
+            version: Some(update_tag(version)?),
+        }),
         _ => Err("usage: t3tray update [--version vX.Y.Z]".into()),
     }
 }

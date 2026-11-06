@@ -109,6 +109,26 @@ pub fn installer_args(installed: &Installed, tray_running: bool) -> Vec<String> 
 
 pub const RELEASES: &str = "https://github.com/AkiVonAkira/t3tray/releases";
 
+/// The release to install, or None when the latest release is already running.
+/// A tag GitHub reports as latest passes the same check as `--version`, so an
+/// installer that cannot replace the running executable never starts.
+pub fn target_tag(
+    requested: Option<&str>,
+    current: &str,
+    latest: impl FnOnce() -> Result<String, String>,
+) -> Result<Option<String>, String> {
+    let tag = match requested {
+        Some(tag) => tag.to_owned(),
+        None => latest()?,
+    };
+    if requested.is_none() && tag == current {
+        return Ok(None);
+    }
+    crate::cli::update_tag(&tag)
+        .map(Some)
+        .map_err(|e| format!("release {tag}: {e}"))
+}
+
 /// GitHub answers releases/latest with a redirect to releases/tag/<tag>.
 pub fn release_tag(location: &str) -> Option<&str> {
     let (_, rest) = location.split_once("/releases/tag/")?;
@@ -184,6 +204,25 @@ mod tests {
     fn a_foreign_sign_in_entry_stops_the_update() {
         let line = format!("{EXE} --port 4000 --unknown");
         assert!(installed_settings(Some(&line), None).is_err());
+    }
+
+    #[test]
+    fn latest_release_older_than_self_update_is_rejected_like_an_explicit_version() {
+        let latest = |tag: &str| {
+            let tag = tag.to_owned();
+            move || Ok(tag)
+        };
+        let error = target_tag(None, "v0.2.0", latest("v0.1.1")).unwrap_err();
+        assert!(error.contains("v0.2.0 or newer"), "{error}");
+        assert_eq!(target_tag(None, "v0.2.0", latest("v0.2.0")), Ok(None));
+        assert_eq!(
+            target_tag(None, "v0.2.0", latest("v0.3.0")),
+            Ok(Some("v0.3.0".into()))
+        );
+        assert_eq!(
+            target_tag(Some("v0.2.0"), "v0.2.0", latest("v9.0.0")),
+            Ok(Some("v0.2.0".into()))
+        );
     }
 
     #[test]

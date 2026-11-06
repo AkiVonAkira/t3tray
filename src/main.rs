@@ -26,7 +26,9 @@ use sha2::{Digest, Sha256};
 use t3tray::channel::Channel;
 use t3tray::cli::{self, Command as Cli, RunOptions, Signal};
 use t3tray::status::{format_status, local_host, not_running_json, StatusFormat};
-use t3tray::update::{checksum, installed_settings, installer_args, release_tag, RELEASES};
+use t3tray::update::{
+    checksum, installed_settings, installer_args, release_tag, target_tag, RELEASES,
+};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use windows_sys::Win32::Foundation::*;
@@ -209,8 +211,18 @@ fn fetch(url: &str) -> Result<Vec<u8>, String> {
     Ok(body)
 }
 
+// CI's update journey builds with this feature and serves fixture releases over
+// local HTTP. Release builds have no way to change where updates come from.
+fn releases() -> String {
+    #[cfg(feature = "fixture-releases")]
+    if let Ok(url) = std::env::var("T3TRAY_FIXTURE_RELEASES") {
+        return url;
+    }
+    RELEASES.to_owned()
+}
+
 fn latest_tag() -> Result<String, String> {
-    let url = format!("{RELEASES}/latest");
+    let url = format!("{}/latest", releases());
     let response = ureq::AgentBuilder::new()
         .redirects(0)
         .build()
@@ -227,7 +239,7 @@ fn latest_tag() -> Result<String, String> {
 // The release installer replaces this executable. It renames the running file
 // first, so this process can wait for it and report its exit code.
 fn run_installer(tag: &str, dir: &Path, args: &[String]) -> Result<i32, String> {
-    let base = format!("{RELEASES}/download/{tag}");
+    let base = format!("{}/download/{tag}", releases());
     let sums = String::from_utf8(fetch(&format!("{base}/SHA256SUMS"))?)
         .map_err(|_| "SHA256SUMS is not text".to_owned())?;
     let installer = fetch(&format!("{base}/install.ps1"))?;
@@ -274,20 +286,20 @@ fn update(version: Option<&str>) -> i32 {
     let plan = sign_in_entry()
         .and_then(|entry| installed_settings(entry.as_deref(), state.as_ref()))
         .and_then(|installed| {
-            let tag = version.map_or_else(latest_tag, |v| Ok(v.to_owned()))?;
+            let tag = target_tag(version, &current, latest_tag)?;
             Ok((installer_args(&installed, running), tag))
         });
     let (args, tag) = match plan {
-        Ok(plan) => plan,
+        Ok((_, None)) => {
+            println!("t3tray {current} is the latest release.");
+            return 0;
+        }
+        Ok((args, Some(tag))) => (args, tag),
         Err(e) => {
             eprintln!("Update failed: {e}. Nothing was changed.");
             return 1;
         }
     };
-    if version.is_none() && tag == current {
-        println!("t3tray {current} is the latest release.");
-        return 0;
-    }
     println!("Updating t3tray {current} to {tag}.");
     if running {
         println!("The tray and its server restart. Active agent turns stop.");

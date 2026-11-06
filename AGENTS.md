@@ -50,7 +50,10 @@ Run `cargo fmt --check`, `cargo test --locked --lib`, and
 `cargo clippy --locked --target x86_64-pc-windows-gnu -- -D warnings`.
 Run `powershell.exe -NoProfile -File scripts/check.ps1` with Pester 5.7.1 and
 PSScriptAnalyzer 1.24.0 available. CI runs the stable real-server journey in
-`scripts/smoke.ps1`; manual CI also checks nightly. Tagged releases build twice
+`scripts/smoke.ps1`; manual CI also checks nightly. The stable journey uses a
+custom T3 home and updates the installed tray from local fixture releases with a
+build that has the test-only `fixture-releases` feature. Release builds never
+enable it. Tagged releases build twice
 to prove reproducibility.
 
 Prefer checks that exercise the real installer, CLI, HTTP, and saved state.
