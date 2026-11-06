@@ -13,8 +13,10 @@ lto = true
 strip = true
 
 [dependencies]
-png = "0.18.1"
 serde_json = "1.0.154"
+
+[target.'cfg(windows)'.dependencies]
+png = "0.18.1"
 sha2 = "0.11.1"
 tray-icon = "0.26.1"
 ureq = "2"

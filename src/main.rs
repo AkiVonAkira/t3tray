@@ -1,10 +1,10 @@
 // t3tray: run the T3 Code server on Windows from a tray icon.
 //
-// It runs the standalone server build from the nightly release (t3-<ver>-win32-x64.zip),
+// It runs the standalone server build from the selected release channel (t3-<ver>-win32-x64.zip),
 // not the CLI inside the desktop app, so the desktop app's own updater can replace its
 // install folder while the server runs. Upstream's service launcher owns server updates.
 //
-//   t3tray.exe [--host H] [--port P] [--base-dir D]  run the tray (one per user session)
+//   t3tray.exe [--host H] [--port P] [--base-dir D] [--channel stable|nightly]  run the tray (one per user session)
 //   t3tray.exe status                         print the running tray's state
 //   t3tray.exe restart|stop|start|quit signal the running tray
 //
@@ -21,6 +21,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
+use t3tray::channel::Channel;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use windows_sys::Win32::Foundation::*;
@@ -99,7 +100,7 @@ fn cli(cmd: &str) -> i32 {
     }
     if !COMMANDS.contains(&cmd) {
         println!(
-            "usage: t3tray [--host H] [--port P] [--base-dir D] | status | {}",
+            "usage: t3tray [--host H] [--port P] [--base-dir D] [--channel stable|nightly] | status | {}",
             COMMANDS.join(" | ")
         );
         return 2;
@@ -223,33 +224,49 @@ fn file_product_version(path: &Path) -> Option<String> {
     }
 }
 
-fn latest_release_version() -> Result<String, String> {
-    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=10");
-    let body = ureq::get(&url)
+fn release_json(url: &str) -> Result<serde_json::Value, String> {
+    let body = ureq::get(url)
         .set("User-Agent", "t3tray")
         .call()
         .map_err(|e| e.to_string())?
         .into_string()
         .map_err(|e| e.to_string())?;
-    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    for r in v.as_array().into_iter().flatten() {
-        let has_zip = r["assets"].as_array().into_iter().flatten().any(|a| {
-            a["name"]
-                .as_str()
-                .is_some_and(|n| n.ends_with("-win32-x64.zip"))
-        });
-        if let (true, Some(tag)) = (has_zip, r["tag_name"].as_str()) {
-            return Ok(tag.trim_start_matches('v').to_owned());
-        }
-    }
-    Err("no release with a win32-x64 server zip".into())
+    serde_json::from_str(&body).map_err(|e| e.to_string())
 }
 
-fn target_version() -> Result<String, String> {
-    match desktop_version() {
-        Some(v) => Ok(v),
-        None => latest_release_version(),
+fn latest_release_version(channel: Channel) -> Result<String, String> {
+    let base = format!("https://api.github.com/repos/{REPO}/releases");
+    if channel == Channel::Stable {
+        let release = release_json(&format!("{base}/latest"))?;
+        if let Some(version) = channel.release_version(&release) {
+            return Ok(version.into());
+        }
     }
+    for page in 1.. {
+        let releases = release_json(&format!("{base}?per_page=100&page={page}"))?;
+        let releases = releases.as_array().ok_or("invalid release list")?;
+        for release in releases {
+            if let Some(version) = channel.release_version(release) {
+                return Ok(version.into());
+            }
+        }
+        if releases.len() < 100 {
+            break;
+        }
+    }
+    Err(format!("no {channel} release with a win32-x64 server zip"))
+}
+
+fn target_version(channel: Channel) -> Result<String, String> {
+    if let Some(version) = desktop_version() {
+        if Channel::of_version(&version) == Some(channel) {
+            return Ok(version);
+        }
+        log(&format!(
+            "ignoring installed desktop version {version}: it is not on the selected {channel} channel"
+        ));
+    }
+    latest_release_version(channel)
 }
 
 fn service_home(base_dir: Option<&str>) -> PathBuf {
@@ -303,12 +320,12 @@ fn read_service_state(base: &Path) -> Result<Option<ServiceState>, String> {
     }))
 }
 
-fn seed_service(base: &Path) -> Result<String, String> {
+fn seed_service(base: &Path, channel: Channel) -> Result<String, String> {
     if let Some(state) = read_service_state(base)? {
         download(base, &state.active_version)?;
         return Ok(state.active_version);
     }
-    let version = target_version()?;
+    let version = target_version(channel)?;
     download(base, &version)?;
     // Publish a complete initial state without replacing a state another launcher created.
     let runtime = base.join("runtime");
@@ -824,6 +841,7 @@ fn probe_ready(host: &str, port: u16, started_at: u64, tx: mpsc::Sender<Msg>) {
 }
 
 struct App {
+    channel: Channel,
     host: String,
     port: u16,
     base_dir: Option<String>,
@@ -901,8 +919,9 @@ impl App {
         self.last_check = Some(Instant::now());
         let tx = self.tx.clone();
         let base = service_home(self.base_dir.as_deref());
+        let channel = self.channel;
         std::thread::spawn(move || {
-            let r = seed_service(&base);
+            let r = seed_service(&base, channel);
             let _ = tx.send(Msg::Seed(r));
         });
     }
@@ -971,6 +990,7 @@ impl App {
     fn state_json(&self) -> String {
         serde_json::json!({
             "status": self.status(),
+            "channel": self.channel.as_str(),
             "version": self.service_state.as_ref().map(|s| &s.active_version),
             "serviceUpdate": self.service_state.as_ref().and_then(|s| s.update.as_ref()),
             "serverPid": self.server.as_ref().map(|s| s.child.id()),
@@ -1034,10 +1054,11 @@ impl Ui {
             self.light = Some(light);
         }
         let head = match &app.server {
-            Some(s) if app.ready => format!("T3 server {} on {}:{}", s.version, app.host, app.port),
-            Some(s) => format!("T3 server starting {}", s.version),
-            None => format!("T3 server {}", app.status()),
+            Some(s) if app.ready => format!("{} on {}:{}", s.version, app.host, app.port),
+            Some(s) => format!("starting {}", s.version),
+            None => app.status().to_owned(),
         };
+        let head = format!("T3 server ({}) {head}", app.channel);
         let head = match app.service_state.as_ref().and_then(|s| s.update.as_ref()) {
             Some(u) => format!("{head} [{}]", u["status"].as_str().unwrap_or("unknown")),
             None => head,
@@ -1092,6 +1113,15 @@ fn main() {
     if let Some(cmd) = args.first().filter(|a| !a.starts_with("--")) {
         std::process::exit(cli(cmd));
     }
+    let channel = match Channel::from_args(&args) {
+        Ok(channel) => channel,
+        Err(error) => {
+            unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
+            eprintln!("{error}");
+            log(&error);
+            std::process::exit(2);
+        }
+    };
     let host = arg_value(&args, "--host").unwrap_or_else(|| "127.0.0.1".into());
     let port: u16 = arg_value(&args, "--port")
         .and_then(|p| p.parse().ok())
@@ -1111,9 +1141,12 @@ fn main() {
         })
         .collect();
 
-    log(&format!("tray starting, host {host} port {port}"));
+    log(&format!(
+        "tray starting, channel {channel} host {host} port {port}"
+    ));
     let (tx, rx) = mpsc::channel();
     let mut app = App {
+        channel,
         host,
         port,
         base_dir: arg_value(&args, "--base-dir"),
@@ -1131,7 +1164,8 @@ fn main() {
     };
 
     let menu = Menu::new();
-    let status = MenuItem::new("T3 server", false, None);
+    let heading = format!("T3 server ({channel})");
+    let status = MenuItem::new(&heading, false, None);
     let restart = MenuItem::new("Restart server", true, None);
     let toggle = MenuItem::new("Stop server", true, None);
     let logs = MenuItem::new("Open logs", true, None);
@@ -1142,7 +1176,7 @@ fn main() {
         .expect("menu");
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("T3 server")
+        .with_tooltip(&heading)
         .with_icon(Icon::from_rgba(icon_pixels(Light::Amber, None), 32, 32).expect("icon"))
         .build()
         .expect("tray");

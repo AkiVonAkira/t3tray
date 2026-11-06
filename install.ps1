@@ -5,6 +5,8 @@ param(
     [string]$ListenHost = $(if ($env:T3TRAY_HOST) { $env:T3TRAY_HOST } else { '127.0.0.1' }),
     [ValidateRange(1, 65535)]
     [int]$Port = $(if ($env:T3TRAY_PORT) { [int]$env:T3TRAY_PORT } else { 3773 }),
+    [ValidateSet('stable', 'nightly')]
+    [string]$Channel = $(if ($env:T3TRAY_CHANNEL) { $env:T3TRAY_CHANNEL } else { 'stable' }),
     [string]$ExePath,
     [string]$AssetDir,
     [switch]$NoStart,
@@ -68,7 +70,7 @@ try {
     # Piping makes PowerShell wait for the GUI executable and forward its output.
     "@echo off`r`npowershell.exe -NoLogo -NoProfile -Command `"& (Join-Path `$env:USERPROFILE '.t3tray\t3tray.exe') %* | ForEach-Object { `$_ }; exit `$LASTEXITCODE`"`r`nexit /b %ERRORLEVEL%" |
         Set-Content -LiteralPath (Join-Path $binDir 't3tray.cmd') -Encoding ascii
-    $runArgs = "--host $ListenHost --port $Port"
+    $runArgs = "--host $ListenHost --port $Port --channel $($Channel.ToLowerInvariant())"
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     if (-not (Test-Path -LiteralPath $runKey)) { $null = New-Item -Path $runKey }
     Set-ItemProperty -Path $runKey -Name T3Tray -Value "`"$exe`" $runArgs"
