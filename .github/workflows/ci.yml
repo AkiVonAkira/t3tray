@@ -72,4 +72,7 @@ jobs:
       - name: Nightly compatibility check on manual runs
         if: github.event_name == 'workflow_dispatch'
         shell: powershell
-        run: ./scripts/smoke.ps1 -Channel nightly
+        run: |
+          $env:USERPROFILE = Join-Path $env:RUNNER_TEMP 't3tray-nightly'
+          $null = New-Item -ItemType Directory -Force $env:USERPROFILE
+          ./scripts/smoke.ps1 -Channel nightly
