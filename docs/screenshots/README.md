@@ -15,16 +15,22 @@ the suggestion; arrow keys move within the field.
 ## Review the changes
 
 Settings, installation changes, and checks have separate groups. The LAN example
-includes the Private-network firewall rule and retirement of win-t3service.
+includes the Private-network firewall rule.
 
-![Grouped review before installation](installer-review-v2.png)
+![Grouped review before installation](installer-review-v3.png)
 
 ## Finish setup
 
 This preview calls the progress and summary renderers with simulated successful
 steps. A real interactive installation shows success after verification passes.
 
-![One line per step and completion instructions](installer-complete-v2.png)
+![One line per step and completion instructions](installer-complete-v3.png)
+
+## List the commands
+
+`t3tray` with no command prints this help and exits without starting the tray.
+
+![Command list printed by t3tray help](help-v3.png)
 
 ## Check the server
 

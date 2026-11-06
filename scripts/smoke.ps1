@@ -18,14 +18,14 @@ try {
     }
     # Hosted runners have no interactive logon token for the one-shot task.
     $installArgs = @{ ExePath = "$PSScriptRoot\..\dist\t3tray.exe"; NoStart = $true }
-    $launchArgs = '--host 127.0.0.1 --port 3773'
+    $launchArgs = 'run --host 127.0.0.1 --port 3773'
     if ($Channel -eq 'nightly') {
         $installArgs.Channel = $Channel
         $launchArgs += ' --channel nightly'
     }
     & "$PSScriptRoot\..\install.ps1" @installArgs
     $runValue = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name T3Tray).T3Tray
-    if ($runValue -notlike "*--channel $Channel") { throw "Run value does not select $Channel." }
+    if ($runValue -notlike "*`" run --host 127.0.0.1 --port 3773 --channel $Channel") { throw "Run value does not launch run with $Channel. $runValue" }
     Start-Process -FilePath $exe -ArgumentList $launchArgs
     $deadline = (Get-Date).AddMinutes(10)
     do {
@@ -54,6 +54,7 @@ try {
     $tray = Get-Process -Name t3tray -ErrorAction SilentlyContinue
     if ($tray) { $tray | Wait-Process -Timeout 30 -ErrorAction Stop }
     $otherChannel = if ($Channel -eq 'stable') { 'nightly' } else { 'stable' }
+    Write-Output 'Relaunching with the flag-only sign-in command written by t3tray 0.1.'
     Start-Process -FilePath $exe -ArgumentList "--host 127.0.0.1 --port 3773 --channel $otherChannel"
     $deadline = (Get-Date).AddMinutes(2)
     do {

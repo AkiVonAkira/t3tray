@@ -24,6 +24,7 @@ Invoke-UninstallStep 'Remove executable and wrapper' {
     foreach ($path in @($exe, (Join-Path $env:USERPROFILE '.t3\bin\t3tray.cmd'))) {
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     }
+    Get-ChildItem -LiteralPath $trayDir -Filter 't3tray.*.old' -File -ErrorAction SilentlyContinue | Remove-Item -Force
 }
 if ($Purge -and (Test-Path -LiteralPath $trayDir)) {
     Invoke-UninstallStep 'Remove tray directory and logs' { Remove-Item -LiteralPath $trayDir -Recurse -Force }

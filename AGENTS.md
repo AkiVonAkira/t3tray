@@ -32,6 +32,10 @@ for flags, paths, and update behavior.
   the progress output. Keep useful diagnostics on failure.
 - `src/main.rs` owns the Windows tray and CLI; `src/channel.rs` selects the initial
   server release. Existing launcher state owns the active server version.
+- Bare `t3tray` prints help. Every tray launch, including the sign-in entry,
+  the installer's start task, and smoke scripts, uses `t3tray run`. `t3tray update`
+  runs the release installer while its own executable is running, so the installer
+  renames that file before replacing it and must not stop its parent process.
 - Human status is the default. Scripts use `status --json`. Update every consumer
   when changing that contract. Preserve exit 3 for an absent tray.
 - Non-ASCII PowerShell files need a UTF-8 BOM for PowerShell 5.1. `scripts/check.ps1`

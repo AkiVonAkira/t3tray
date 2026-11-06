@@ -53,7 +53,7 @@ Describe 'Mode selection' {
         Test-T3TrayInteractive @{ DryRun = $true } @() $false $false $false | Should -BeTrue
     }
     It 'keeps explicit parameters unattended even when false' {
-        foreach ($name in @('Channel', 'Port', 'ListenHost', 'Version', 'ExePath', 'AssetDir', 'NoStart', 'RetireWinT3Service', 'NonInteractive')) {
+        foreach ($name in @('Channel', 'Port', 'ListenHost', 'Version', 'ExePath', 'AssetDir', 'BaseDir', 'NoStart', 'NoStartAtSignIn', 'NonInteractive')) {
             $parameters = @{}; $parameters[$name] = $false
             Test-T3TrayInteractive $parameters @() $false $false $false | Should -BeFalse
         }
@@ -77,6 +77,17 @@ Describe 'Configuration and plans' {
         $config.Port | Should -Be 4000
         $config.ListenHost | Should -Be '0.0.0.0'
         (ConvertFrom-T3TrayRunValue '' nightly).Channel | Should -Be nightly
+    }
+    It 'reads the run command and a quoted T3 home from the sign-in entry' {
+        $config = ConvertFrom-T3TrayRunValue '"C:\Users\Example\.t3tray\t3tray.exe" run --host 127.0.0.1 --port 4100 --channel nightly --base-dir "D:\T3 Home"'
+        $config.Port | Should -Be 4100
+        $config.Channel | Should -Be nightly
+        $config.BaseDir | Should -Be 'D:\T3 Home'
+    }
+    It 'rejects a T3 home that would break the sign-in command' {
+        { New-T3TrayConfig -BaseDir 'D:\' } | Should -Throw
+        { New-T3TrayConfig -BaseDir 'D:\a"b' } | Should -Throw
+        (New-T3TrayConfig -BaseDir 'D:\T3 Home\').BaseDir | Should -Be 'D:\T3 Home'
     }
     It 'rejects invalid ports' -TestCases @(@{ Value = '0' }, @{ Value = '65536' }, @{ Value = 'abc' }, @{ Value = '37.73' }) {
         param($Value)
@@ -110,17 +121,18 @@ Describe 'Configuration and plans' {
     }
 }
 Describe 'Wizard navigation with scripted answers' {
-    It 'preserves LAN choices through review back and skips no detected task' {
+    It 'goes from start at sign-in to review and back, keeping LAN choices and the T3 home' {
         $script:answers = [Collections.Generic.Queue[int]]::new()
-        foreach ($answer in @(0, 1, 1, 0, 1, 0, 1, 0, 0)) { $script:answers.Enqueue($answer) }
+        foreach ($answer in @(0, 1, 1, 0, 1, 1, 0, 0)) { $script:answers.Enqueue($answer) }
         Mock Read-T3TrayChoice { $script:answers.Dequeue() }
         Mock Read-T3TrayText { '4000' }
         Mock Get-T3TrayPortOwner { 'Available' }
-        $detection = [pscustomobject]@{ Config = (New-T3TrayConfig); Installed = $true; RunValue = ''; OldTask = $true; Desktop = 'nightly'; PortOwner = 'Available' }
+        $detection = [pscustomobject]@{ Config = (New-T3TrayConfig -BaseDir 'D:\T3 Home'); Installed = $true; RunValue = ''; Desktop = 'nightly'; PortOwner = 'Available' }
         $config = Invoke-T3TrayWizard $detection
         $config.Channel | Should -Be nightly
         $config.Firewall | Should -BeTrue
-        $config.Retire | Should -BeTrue
+        $config.StartAtSignIn | Should -BeTrue
+        $config.BaseDir | Should -Be 'D:\T3 Home'
         $config.Port | Should -Be 4000
         $script:answers.Count | Should -Be 0
     }
@@ -134,12 +146,30 @@ Describe 'Wizard branches' {
         Mock Read-T3TrayChoice { $script:choices.Dequeue() }
         Mock Read-T3TrayText { $script:fields.Dequeue() }
         Mock Get-T3TrayPortOwner { 'Available' }
-        $detection = [pscustomobject]@{ Config = (New-T3TrayConfig); Installed = $false; RunValue = ''; OldTask = $false; Desktop = 'Not found'; PortOwner = 'Available' }
+        $detection = [pscustomobject]@{ Config = (New-T3TrayConfig); Installed = $false; RunValue = ''; Desktop = 'Not found'; PortOwner = 'Available' }
         $config = Invoke-T3TrayWizard $detection
         $config.ListenHost | Should -Be localhost
         $config.Port | Should -Be 5000
         $config.Firewall | Should -BeFalse
         $script:fields.Count | Should -Be 0
+    }
+}
+Describe 'Executable replacement' {
+    It 'replaces t3tray.exe while a process runs from it, as t3tray update does' {
+        $tray = Join-Path $TestDrive 'tray'
+        $null = New-Item -ItemType Directory $tray
+        $exe = Join-Path $tray 't3tray.exe'
+        Copy-Item "$env:SystemRoot\System32\PING.EXE" $exe
+        $source = Join-Path $TestDrive 'new.exe'
+        Set-Content -LiteralPath $source -Value 'new release'
+        $info = New-Object Diagnostics.ProcessStartInfo -Property @{ FileName = $exe; Arguments = '-n 120 127.0.0.1'
+            UseShellExecute = $false; CreateNoWindow = $true; RedirectStandardOutput = $true }
+        $running = [Diagnostics.Process]::Start($info)
+        try { Install-T3TrayExecutable $source $exe }
+        finally { $running.Kill(); $running.WaitForExit() }
+        Get-Content -LiteralPath $exe | Should -Be 'new release'
+        Install-T3TrayExecutable $source $exe
+        @(Get-ChildItem -LiteralPath $tray -Filter 't3tray.*.old').Count | Should -Be 1
     }
 }
 Describe 'Streamed entry scripts' {

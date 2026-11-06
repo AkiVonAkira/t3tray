@@ -44,6 +44,8 @@ The tray menu has **Restart server**, **Stop server**, **Start server**, **Open
 logs**, and **Quit**. Green means ready, amber means starting or waiting, and red
 means stopped.
 
+Run `t3tray` with no command to list the commands.
+
 | Command | What it does |
 | --- | --- |
 | `t3tray status` | Shows server status, address, and logs. |
@@ -52,6 +54,8 @@ means stopped.
 | `t3tray stop` | Stops the server; keeps the tray open. |
 | `t3tray start` | Starts the server and waits for readiness. |
 | `t3tray quit` | Closes the tray and stops its server processes. |
+| `t3tray update` | Updates t3tray to the latest release and keeps its settings. |
+| `t3tray help` | Lists the commands and run options. |
 
 ![Readable t3tray status with example data](docs/screenshots/status-v2.png)
 
@@ -59,12 +63,17 @@ means stopped.
 data; the completion preview simulates installation steps.
 
 Wait for active agent turns to finish before stopping, restarting, quitting, or
-reinstalling. These actions can terminate their work.
+updating. These actions can terminate their work.
 
 ## Update or troubleshoot
 
-Use **Update machines** in T3 Code to update the server. Re-run the installer to
-update t3tray. Updating the desktop app does not update this standalone server.
+Use **Update machines** in T3 Code to update the server. Run `t3tray update` to
+update t3tray itself. It keeps the listen address, port, channel, T3 home, and
+sign-in startup setting. Updating the desktop app does not update this standalone
+server.
+
+t3tray v0.1.1 and older have no `update` command. Re-run the installer once to
+reach v0.2.0. The installer reads the existing sign-in entry and suggests its settings.
 
 If setup fails, read the failed step and check these logs:
 

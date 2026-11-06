@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.2.0
+
+- Add `t3tray update`. It downloads the release installer, checks it against `SHA256SUMS`, and reinstalls with the saved channel, address, port, T3 home, and sign-in setting. `--version` pins a release from v0.2.0 on.
+- Print help for `t3tray`, `t3tray help`, and `--help` instead of starting the tray. Start the tray with `t3tray run`. Sign-in entries and the installer now write `run`; flag-only entries from v0.1 still start the tray.
+- Reject unknown `run` options and invalid ports, hosts, and channels with exit code 2 instead of using defaults.
+- Add installer `-BaseDir` and `-NoStartAtSignIn`. The installer renames a running `t3tray.exe` before replacing it.
+- Remove the win-t3service retirement option, wizard step, and detection.
+- Add `baseDir` to `status --json`.
+
+Upgrade from v0.1.1 by re-running the installer once. v0.1.1 has no `update` command.
+
 ## v0.1.1
 
 - Make `t3tray status` readable by default. Scripts must use `t3tray status --json`.

@@ -15,16 +15,6 @@ impl Channel {
         }
     }
 
-    pub fn from_args(args: &[String]) -> Result<Self, String> {
-        match args.iter().position(|arg| arg == "--channel") {
-            None => Ok(Self::Stable),
-            Some(index) => args
-                .get(index + 1)
-                .ok_or_else(|| "--channel requires stable or nightly".to_owned())?
-                .parse(),
-        }
-    }
-
     pub fn of_version(version: &str) -> Option<Self> {
         let (core, nightly) = match version.split_once("-nightly.") {
             Some((core, suffix)) => (core, Some(suffix)),
@@ -87,27 +77,6 @@ impl fmt::Display for Channel {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn cli_defaults_to_stable_and_rejects_invalid_channels() {
-        let args = |values: &[&str]| values.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
-        assert_eq!(Channel::from_args(&[]), Ok(Channel::Stable));
-        assert_eq!(
-            Channel::from_args(&args(&["--channel", "nightly"])),
-            Ok(Channel::Nightly)
-        );
-        assert_eq!(
-            Channel::from_args(&args(&["--channel", "stable"])),
-            Ok(Channel::Stable)
-        );
-        for values in [
-            vec!["--channel"],
-            vec!["--channel", "preview"],
-            vec!["--channel", "--host"],
-        ] {
-            assert!(Channel::from_args(&args(&values)).is_err());
-        }
-    }
 
     #[test]
     fn only_stable_and_dated_nightly_versions_have_channels() {
