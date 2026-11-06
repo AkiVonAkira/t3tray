@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Make `t3tray status` readable by default. Scripts must use `t3tray status --json`.
+- Clarify installer text entry, group the review, and show one result per install step with completion instructions.
+- Simplify setup documentation and combine routine CI checks. Keep reproducibility in tagged releases and run nightly smoke checks manually.
+
 - Default initial server seeding to stable. Add `--channel stable|nightly`, installer `-Channel`, and `T3TRAY_CHANNEL`.
 - Prefer an installed desktop version only when it matches the selected channel. Log ignored versions.
 - Skip preview and Android releases, require the matching Windows x64 server zip, and follow release pagination.

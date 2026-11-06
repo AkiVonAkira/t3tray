@@ -1,120 +1,100 @@
 # t3tray
 
-t3tray runs the T3 Code server in your Windows desktop session, with a tray icon and sign-in startup. It is unofficial and is not affiliated with T3 Code or Ping Labs.
+Run the T3 Code server from your Windows system tray. Start it at sign-in, see
+its status, and manage server updates from T3 Code's **Update machines** dialog.
 
-Windows has no upstream `t3 service` command yet. t3tray runs upstream's `t3.exe __service-launcher` so the in-app updater and **Update machines** dialog can manage the Windows server as a `boot-service`. The standalone server stays outside the desktop app's install directory, so the desktop updater can replace that directory while the server runs.
+Unofficial. Not affiliated with T3 Code or Ping Labs.
 
 ## Install
 
-Use Windows 10 or 11 on x64, Windows PowerShell 5.1 or newer, and an internet connection. Rust and administrator rights are not required. ARM64 is not tested. Turn off **Local environment** in the T3 desktop app before starting t3tray, then pair the desktop app with this server.
-
-Run in PowerShell as the Windows user who will run T3:
+You need Windows 10 or 11 x64, PowerShell 5.1 or newer, and an internet connection.
+Run this as the Windows user who uses T3 Code:
 
 ```powershell
 irm https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/install.ps1 | iex
 ```
 
-The installer downloads the latest t3tray release and verifies `t3tray.exe` against its release `SHA256SUMS`. It installs `%USERPROFILE%\.t3tray\t3tray.exe`, writes `%USERPROFILE%\.t3\bin\t3tray.cmd`, and sets the current user's `T3Tray` Run value. Add `%USERPROFILE%\.t3\bin` to your user `PATH`, or call the wrapper by its full path.
+The installer detects your settings and walks you through the server channel,
+network access, port, and sign-in startup. Review the changes, then install.
+Only the optional Private-network firewall rule asks for administrator approval.
+Rust is not required.
 
-With no parameters or `T3TRAY_*` environment variables, the installer opens a keyboard wizard in an interactive console. It detects your existing settings and desktop channel, then asks for the channel, listen address, port, sign-in startup, and whether to retire win-t3service. LAN mode offers a Private-profile firewall rule. Only that rule requests UAC elevation. Review the changes before installing.
-
-Use arrow keys to choose, Space or Enter to confirm, `b` to go back, and `q` to quit. Text fields use Backspace to edit and Escape to go back. `-DryRun` runs the wizard and prints the plan without changing the installation. `-NonInteractive`, any configuration parameter, any `T3TRAY_*` variable, redirected input/output, or `CI` selects the existing unattended flow. For example, `./install.ps1 -DryRun -Channel nightly -ListenHost 0.0.0.0 -Port 3773` prints an unattended plan.
-
-Interactive installs verify the tray process, status, HTTP 200, and `server.getConfig` with `serverSelfUpdate=boot-service`. The RPC check creates a one-minute local authentication session and revokes it afterward. Choosing no sign-in startup removes the Run value but starts the tray for the current session. The uninstaller asks for confirmation when run without arguments in an interactive console.
-
-The tray starts through a one-shot interactive scheduled task, including when you install over SSH. You must already be signed in to the Windows desktop. The installer waits up to 10 minutes for the real server to answer HTTP 200.
-
-For explicit parameters, invoke the downloaded text as a scriptblock:
-
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/install.ps1))) -Version v0.1.0 -ListenHost 127.0.0.1 -Port 3773
-```
-
-The pipe form also accepts `T3TRAY_VERSION`, `T3TRAY_HOST`, `T3TRAY_PORT`, and `T3TRAY_CHANNEL` environment variables. Parameters override them. Download and inspect the script before running it if you prefer.
-
-| Parameter | Default | Effect |
-| --- | --- | --- |
-| `-Version` | Latest release | Selects a release such as `v0.1.0`. |
-| `-ListenHost` | `127.0.0.1` | Sets the server's listen address. |
-| `-Port` | `3773` | Sets the TCP port, from 1 to 65535. |
-| `-Channel` | `stable` | Seeds the T3 server from `stable` or `nightly`. Saves `--channel` in the Run value. |
-| `-ExePath` | Download | Uses a local executable with `SHA256SUMS` beside it. |
-| `-AssetDir` | Download | Uses `t3tray.exe` and `SHA256SUMS` in a local directory. Mutually exclusive with `-ExePath`. |
-| `-NoStart` | Off | Registers sign-in startup without starting now. Useful on CI runners without an interactive logon. |
-| `-RetireWinT3Service` | Off | Stops the old user service, disables its `T3 Code Server (User Logon)` task, and removes `t3service.cmd`. Its data stays in place. |
-
-While this repository is private, anonymous downloads and the one-liner cannot work. Download release assets with an authenticated GitHub client, then use `-AssetDir`. No token belongs in the installer or tray.
-
-## Commands and menu
+When setup finishes, check the server:
 
 ```powershell
 t3tray status
-t3tray restart
-t3tray stop
-t3tray start
-t3tray quit
 ```
 
-`status` prints JSON while the tray runs and exits with code 3 otherwise. `restart` and `start` wait up to 60 seconds for HTTP readiness. `stop` keeps the tray open. `quit` closes the tray and its server tree. Wait for agent turns to finish before stopping, restarting, quitting, or reinstalling.
-
-Launch the executable without a command to open the tray. Its flags are `--host`, `--port`, `--base-dir`, and `--channel stable|nightly`. The channel defaults to `stable` and appears in status JSON, the tooltip, and the menu header. `--base-dir` selects the server's T3 home, while tray state and logs stay in `.t3tray`. The default T3 home is `%USERPROFILE%\.t3`.
-
-The menu shows server status, **Restart server**, **Stop server** or **Start server**, **Open logs**, and **Quit**. The icon is green after HTTP readiness, amber while starting, waiting, or reporting a pending update, and red while stopped. `icon-preview <directory>` writes PNG previews for maintainers.
-
-## Updates and logs
-
-On first start, t3tray downloads the standalone Windows server zip from the selected upstream channel and checks its SHA-256. `stable` selects releases tagged `vX.Y.Z`, preferring upstream's latest release. `nightly` selects releases tagged `vX.Y.Z-nightly.YYYYMMDD.N`. Both require the matching `t3-<version>-win32-x64.zip` asset. Preview and `android-*` tags are skipped. Release lookup follows pagination when needed.
-
-If the installed T3 desktop app has a version on the selected channel, t3tray prefers that exact version. It ignores a desktop version on another channel and logs why. An existing `.t3\runtime\service-state.json` always keeps its `activeVersion`, even if you change `--channel`. The channel selects only the initial runtime. The tray checks that seed at startup and every 10 minutes without selecting a newer version.
-
-To seed nightly on a new installation, pass `-Channel nightly` to the installer or set the environment variable before the pipe form:
+If PowerShell cannot find `t3tray`, add `%USERPROFILE%\.t3\bin` to your user
+`PATH`, or run the installed wrapper directly:
 
 ```powershell
-$env:T3TRAY_CHANNEL = 'nightly'
-irm https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/install.ps1 | iex
+& "$env:USERPROFILE\.t3\bin\t3tray.cmd" status
 ```
 
-`-Version` selects the t3tray executable release. `-Channel` selects the initial upstream T3 server release. They are independent.
+In the T3 desktop app, turn off **Local environment** and pair the app with this
+server. The default address on this PC is http://127.0.0.1:3773/.
 
-Use T3 Code's **Update machines** dialog for server updates. Upstream's launcher owns the update trial, database backups, rollback, and runtime pruning. Updating the desktop app does not select a new server version. Re-run this installer to update t3tray itself. The desktop app uses its own updater; this repo does not provide a desktop updater script.
+The tray runs while you are signed in. It does not start before sign-in after a
+reboot. Keep a desktop session signed in when installing over SSH.
 
-Tray state is `%USERPROFILE%\.t3tray\state.json`. Logs are `.t3tray\logs\t3tray.log` and `.t3tray\logs\server.log`. The server log rotates at 20 MiB when the server starts. A new server process reads user environment variables from the registry. The tray retries after an unexpected exit in 10 seconds, or in 60 seconds on exit 78 when another process owns the T3 home.
+## Use the tray or terminal
+
+The tray menu has **Restart server**, **Stop server**, **Start server**, **Open
+logs**, and **Quit**. Green means ready, amber means starting or waiting, and red
+means stopped.
+
+| Command | What it does |
+| --- | --- |
+| `t3tray status` | Shows server status, address, and logs. |
+| `t3tray status --json` | Returns JSON for scripts and agents. |
+| `t3tray restart` | Restarts the server and waits for readiness. |
+| `t3tray stop` | Stops the server; keeps the tray open. |
+| `t3tray start` | Starts the server and waits for readiness. |
+| `t3tray quit` | Closes the tray and stops its server processes. |
+
+![Readable t3tray status with example data](docs/screenshots/status-v2.png)
+
+[See the installer screens](docs/screenshots/README.md). The captures use example
+data; the completion preview simulates installation steps.
+
+Wait for active agent turns to finish before stopping, restarting, quitting, or
+reinstalling. These actions can terminate their work.
+
+## Update or troubleshoot
+
+Use **Update machines** in T3 Code to update the server. Re-run the installer to
+update t3tray. Updating the desktop app does not update this standalone server.
+
+If setup fails, read the failed step and check these logs:
+
+```powershell
+Get-Content "$env:USERPROFILE\.t3tray\logs\t3tray.log" -Tail 40
+Get-Content "$env:USERPROFILE\.t3tray\logs\server.log" -Tail 40
+```
+
+For LAN access, choose **LAN** in the installer and allow only the networks you
+trust. Keep T3 authentication enabled. The executable is unsigned, so Windows
+SmartScreen may warn about it. See [security notes](SECURITY.md).
 
 ## Uninstall
 
-Download `uninstall.ps1` from a release and run:
+Download [uninstall.ps1](https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/uninstall.ps1)
+and run it in PowerShell:
 
 ```powershell
 & .\uninstall.ps1
 ```
 
-This quits the tray, stops its server tree, and removes the Run value, wrapper, and executable. Logs stay in `.t3tray`. `-Purge` also removes `.t3tray`. Both forms keep `.t3`, including projects, sessions, runtimes, and credentials.
+This removes the tray, its startup entry, and its command wrapper. It keeps logs
+and all T3 projects, sessions, runtimes, and credentials in `.t3`.
+Add `-Purge` to remove `.t3tray` and its logs too.
 
-## Limits and security
+## More detail
 
-- The tray runs after desktop sign-in and stops at sign-out. It does not run before sign-in after a reboot.
-- The server and its children belong to a Windows Job Object. Quitting or restarting the tray can terminate active agent work.
-- Windows handoff hard-kills the old server because Windows has no graceful SIGTERM. Children of an old server can linger until the tray restarts. Rollback is untested.
-- The executable is unsigned. Windows SmartScreen may warn about it.
-- `--host 0.0.0.0` exposes the server on every network interface. Restrict access with a Windows firewall rule and T3 authentication. The installer does not create a firewall rule.
-- Release checksums detect corruption. They do not protect against a compromised release account. See [SECURITY.md](SECURITY.md).
+- [Installer flags, unattended setup, paths, and update behavior](docs/reference.md)
+- [Instructions for agents setting up or changing t3tray](AGENTS.md)
+- [Release history](CHANGELOG.md)
 
-## Build and verify
-
-Install Rust with rustup and MinGW-w64. The exact stable toolchain and Windows GNU target are in `rust-toolchain.toml`. On Ubuntu:
-
-```bash
-sudo apt-get install mingw-w64
-cargo fmt --check
-cargo test --locked --lib
-cargo clippy --locked --target x86_64-pc-windows-gnu -- -D warnings
-bash scripts/build-reproducible.sh
-```
-
-Commit your changes before running the build script. It builds the committed tree twice in separate clean directories, sets `SOURCE_DATE_EPOCH` to the commit timestamp, remaps build paths, disables the PE timestamp, and fails unless both executables are byte-identical. Outputs and checksums go in `dist/`. Reproducing a release requires the same Rust, MinGW, and system tool versions used by its workflow. Runner image updates can change the output.
-
-CI checks formatting, Clippy, reproducibility, and PowerShell scripts. Windows jobs for stable and nightly install the artifact, download the real upstream server, check status and HTTP 200, exercise stop/start, and check that uninstall removes every tray and T3 process while preserving T3 data. Each job also changes the channel and checks that the existing active version stays unchanged. Each starts the executable directly after installing with `-NoStart` because hosted runners lack an interactive desktop logon.
-
-Tags matching `v*` run the release workflow. The tag must match `Cargo.toml`. The workflow publishes the executable, checksums, installer, and uninstaller. It attests build provenance for public repositories. GitHub requires Enterprise Cloud for private-repository attestations, so that step is skipped while this repo is private.
-
-The crate's Git history was extracted with `git subtree split` before adding standalone packaging.
+ARM64 and update rollback are untested. Windows update handoff stops the old
+server without a graceful SIGTERM; its children can linger until the tray restarts.

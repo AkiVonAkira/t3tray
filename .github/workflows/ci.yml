@@ -1,81 +1,64 @@
 name: CI
 on:
   push:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**']
   pull_request:
+    paths-ignore: ['**/*.md', 'docs/**']
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
-    name: Rust and reproducibility
+    name: Rust checks and Windows build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: sudo apt-get update && sudo apt-get install -y mingw-w64
       - run: rustup show
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
       - run: cargo fmt --check
       - run: cargo test --locked --lib
       - run: cargo clippy --locked --target x86_64-pc-windows-gnu -- -D warnings
-      - run: bash scripts/build-reproducible.sh
+      - run: cargo build --locked --release --target x86_64-pc-windows-gnu
+      - name: Package smoke-test binary
+        run: |
+          mkdir dist
+          cp target/x86_64-pc-windows-gnu/release/t3tray.exe dist/
+          cd dist
+          sha256sum t3tray.exe > SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-release
+          name: windows-smoke
           path: dist/
           if-no-files-found: error
-  powershell:
-    name: PowerShell analysis
+          retention-days: 3
+  windows:
+    name: Installer and real server
+    needs: build
     runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - shell: pwsh
-        run: |
-          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Force -Scope CurrentUser
-          $issues = @(Invoke-ScriptAnalyzer -Path . -Recurse -Severity Warning,Error)
-          $issues | Format-Table -AutoSize
-          if ($issues.Count) { throw "PSScriptAnalyzer reported $($issues.Count) issues." }
-  smoke:
-    name: Windows install and real server (${{ matrix.channel }})
-    needs: [build, powershell]
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        channel: [stable, nightly]
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: windows-release
+          name: windows-smoke
           path: dist/
-      - shell: powershell
-        env:
-          SMOKE_CHANNEL: ${{ matrix.channel }}
-        run: |
-          if ($env:SMOKE_CHANNEL -eq 'stable') { ./scripts/smoke.ps1 } else { ./scripts/smoke.ps1 -Channel nightly }
-
-  installer-tests:
-    name: Pester installer decisions
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - shell: pwsh
-        run: |
-          Install-Module Pester -RequiredVersion 5.7.1 -Force -Scope CurrentUser
-          $result = Invoke-Pester -Path tests -PassThru -Output Detailed
-          if ($result.FailedCount) { throw "$($result.FailedCount) Pester tests failed." }
-  interactive-dry-run:
-    name: Windows interactive dry-run
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - shell: powershell
-        run: ./scripts/interactive-smoke.ps1
-      # irm | iex has no script folder, so helpers come from GitHub at this commit.
-      - name: Dry-run with no script folder
+      - name: Check PowerShell 5.1 scripts and installer behavior
         shell: powershell
-        env:
-          T3TRAY_REF: ${{ github.sha }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          & ([scriptblock]::Create((Get-Content install.ps1 -Raw))) -DryRun -NonInteractive
-          & ([scriptblock]::Create((Get-Content uninstall.ps1 -Raw))) -DryRun -NonInteractive
+          Install-Module Pester -RequiredVersion 5.7.1 -Force -Scope CurrentUser -SkipPublisherCheck
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Force -Scope CurrentUser
+          ./scripts/check.ps1
+          ./scripts/status-smoke.ps1 -ExePath ./dist/t3tray.exe
+      - name: Stable install, status, HTTP, stop/start, and uninstall
+        shell: powershell
+        run: ./scripts/smoke.ps1
+      - name: Nightly compatibility check on manual runs
+        if: github.event_name == 'workflow_dispatch'
+        shell: powershell
+        run: ./scripts/smoke.ps1 -Channel nightly
