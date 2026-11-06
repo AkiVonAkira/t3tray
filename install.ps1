@@ -19,6 +19,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 # iex has no script directory. Read the same helpers into memory in that case.
 $installerRoot = $PSScriptRoot
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $sourceBase = 'https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/installer'
 foreach ($name in @('config.ps1', 'ui.ps1', 'verify.ps1')) {
     if ($installerRoot) { . (Join-Path $installerRoot "installer/$name") }

@@ -1,6 +1,7 @@
 ﻿[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Console UI output intentionally bypasses the success pipeline.')]
 param([switch]$Purge, [switch]$NonInteractive, [switch]$DryRun)
 $ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $sourceBase = 'https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/installer'
 foreach ($name in @('config.ps1', 'ui.ps1')) {
     if ($PSScriptRoot) { . (Join-Path $PSScriptRoot "installer/$name") }
