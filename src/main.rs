@@ -128,7 +128,10 @@ fn cli(cmd: &str) -> i32 {
         for _ in 0..60 {
             std::thread::sleep(Duration::from_secs(1));
             let after = read_state_field("startedAt");
-            if after != before && read_state_field("status").as_deref() == Some("running") {
+            // start does not replace a starting server, so it only waits for ready.
+            if (cmd == "start" || after != before)
+                && read_state_field("status").as_deref() == Some("running")
+            {
                 println!(
                     "running {}",
                     read_state_field("version").unwrap_or_default()

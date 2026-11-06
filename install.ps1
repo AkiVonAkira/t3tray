@@ -80,6 +80,7 @@ try {
     $definition.Principal.LogonType = 3
     $definition.Settings.ExecutionTimeLimit = 'PT0S'
     $definition.Settings.DisallowStartIfOnBatteries = $false
+    $definition.Settings.StopIfGoingOnBatteries = $false
     $action = $definition.Actions.Create(0)
     $action.Path = $exe
     $action.Arguments = $runArgs
