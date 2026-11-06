@@ -39,6 +39,10 @@ if ($interactive) {
     $legacyArgs.ShowSteps = $true
 }
 if ($DryRun) {
+    if ($interactive) {
+        Write-T3TrayFrame 'dry-run' @(Get-T3TrayPlan $config $NoStart | ForEach-Object { "○  $_  planned" }) 'No changes made. Verification is planned, not performed.'
+        return
+    }
     Write-Host '┌  t3tray  windows'
     Write-Host '◇  dry-run. No changes made.'
     foreach ($step in Get-T3TrayPlan $config $NoStart) { Write-T3TrayStep $step planned }

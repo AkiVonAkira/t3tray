@@ -15,6 +15,7 @@ if ($interactive) {
     } catch { if ($_.Exception.Message -eq 'cancelled') { Write-Host '■  Cancelled.'; return }; throw }
 }
 if ($DryRun) {
+    if ($interactive) { Write-T3TrayFrame 'uninstall dry-run' @() 'No changes made.' }
     foreach ($step in @('Stop tray', 'Remove sign-in startup', 'Remove executable and wrapper')) { Write-T3TrayStep $step planned }
     if ($Purge) { Write-T3TrayStep 'Remove tray directory and logs' planned }
     return

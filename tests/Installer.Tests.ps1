@@ -93,3 +93,21 @@ Describe 'Wizard navigation with scripted answers' {
         { Invoke-T3TrayWizard ([pscustomobject]@{ Config = (New-T3TrayConfig) }) } | Should -Throw '*cancelled*'
     }
 }
+Describe 'Wizard branches' {
+    It 'visits custom address and preserves values on back' {
+        $script:choices = [Collections.Generic.Queue[int]]::new()
+        foreach ($answer in @(0, 0, 2, 0, 0)) { $script:choices.Enqueue($answer) }
+        $script:fields = [Collections.Generic.Queue[object]]::new()
+        foreach ($answer in @('localhost', $null, 'localhost', '5000')) { $script:fields.Enqueue($answer) }
+        Mock Read-T3TrayChoice { $script:choices.Dequeue() }
+        Mock Read-T3TrayText { $script:fields.Dequeue() }
+        Mock Get-T3TrayPortOwner { 'Available' }
+        $detection = [pscustomobject]@{ Config = (New-T3TrayConfig); Installed = $false; RunValue = ''; OldTask = $false; Desktop = 'Not found'; PortOwner = 'Available' }
+        $config = Invoke-T3TrayWizard $detection
+        $config.ListenHost | Should -Be localhost
+        $config.Port | Should -Be 5000
+        $config.Firewall | Should -BeFalse
+        $script:fields.Count | Should -Be 0
+        Should -Invoke Read-T3TrayChoice -Times 0 -ParameterFilter { $Title -eq 'retire win-t3service' }
+    }
+}
