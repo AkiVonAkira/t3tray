@@ -2,14 +2,13 @@
 //
 // It runs the standalone server build from the nightly release (t3-<ver>-win32-x64.zip),
 // not the CLI inside the desktop app, so the desktop app's own updater can replace its
-// install folder while the server runs. The server version follows the installed desktop
-// app: after an in-app update, the tray downloads the matching zip and offers a restart.
+// install folder while the server runs. Upstream's service launcher owns server updates.
 //
 //   t3tray.exe [--host H] [--port P] [--base-dir D]  run the tray (one per user session)
 //   t3tray.exe status                         print the running tray's state
 //   t3tray.exe restart|stop|start|update|quit signal the running tray
 //
-// Files live in %USERPROFILE%\.t3tray: versions\<ver>\, logs\, state.json.
+// Logs and tray state live in %USERPROFILE%\.t3tray; runtimes live in .t3\runtime.
 #![windows_subsystem = "windows"]
 
 use std::fs::{self, File, OpenOptions};
@@ -204,43 +203,78 @@ fn target_version() -> Result<String, String> {
     }
 }
 
-fn version_dir(v: &str) -> PathBuf {
-    root().join("versions").join(v)
+fn service_home(base_dir: Option<&str>) -> PathBuf {
+    base_dir.map(PathBuf::from).unwrap_or_else(|| home().join(".t3"))
 }
 
-fn installed(v: &str) -> bool {
-    version_dir(v).join("t3.exe").is_file()
+fn version_dir_at(base: &Path, v: &str) -> PathBuf {
+    base.join("runtime").join("versions").join(v)
+}
+
+fn version_dir(v: &str) -> PathBuf {
+    version_dir_at(&service_home(None), v)
+}
+
+fn installed(base: &Path, v: &str) -> bool {
+    let dir = version_dir_at(base, v);
+    dir.join("t3.exe").is_file()
+        && fs::read_to_string(dir.join(".install-complete")).is_ok_and(|s| s.trim() == v)
+}
+
+struct ServiceState {
+    active_version: String,
+    update: Option<serde_json::Value>,
+}
+
+fn read_service_state(base: &Path) -> Result<Option<ServiceState>, String> {
+    let path = base.join("runtime").join("service-state.json");
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let state: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let version = state["activeVersion"].as_str().ok_or("service state has no activeVersion")?;
+    if state["protocol"] != 3 || version.is_empty()
+        || !version.bytes().all(|c| c.is_ascii_alphanumeric() || b".-+".contains(&c))
+        || !version.starts_with(|c: char| c.is_ascii_digit()) {
+        return Err("invalid or unsupported service state; leaving it untouched".into());
+    }
+    Ok(Some(ServiceState { active_version: version.into(), update: state.get("update").cloned() }))
+}
+
+fn seed_service(base: &Path) -> Result<String, String> {
+    if let Some(state) = read_service_state(base)? {
+        download(base, &state.active_version)?;
+        return Ok(state.active_version);
+    }
+    let version = target_version()?;
+    download(base, &version)?;
+    // Publish a complete initial state without replacing a state another launcher created.
+    let runtime = base.join("runtime");
+    let tmp = runtime.join(format!(".t3tray-state-{}-{}", std::process::id(), now_unix()));
+    let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(|e| e.to_string())?;
+    let state = serde_json::json!({ "protocol": 3, "activeVersion": version });
+    file.write_all(state.to_string().as_bytes()).and_then(|_| file.sync_all()).map_err(|e| e.to_string())?;
+    drop(file);
+    let result = fs::hard_link(&tmp, runtime.join("service-state.json"));
+    let _ = fs::remove_file(&tmp);
+    if let Err(e) = result {
+        if e.kind() != std::io::ErrorKind::AlreadyExists { return Err(e.to_string()); }
+    }
+    read_service_state(base)?.map(|s| s.active_version).ok_or("service state disappeared".into())
 }
 
 fn newest_installed() -> Option<String> {
-    let mut dirs: Vec<(SystemTime, String)> = fs::read_dir(root().join("versions"))
-        .ok()?
-        .flatten()
-        .filter(|e| e.path().join("t3.exe").is_file())
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.file_name().to_string_lossy().into_owned())))
-        .collect();
-    dirs.sort();
-    dirs.pop().map(|(_, v)| v)
+    read_service_state(&service_home(None)).ok().flatten().map(|s| s.active_version)
 }
 
-// Keep the running version and the two newest others.
-fn prune(keep: &str) {
-    let Ok(rd) = fs::read_dir(root().join("versions")) else { return };
-    let mut dirs: Vec<(SystemTime, PathBuf)> = rd
-        .flatten()
-        .filter(|e| e.file_name().to_string_lossy() != keep)
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
-        .collect();
-    dirs.sort();
-    dirs.reverse();
-    for (_, p) in dirs.into_iter().skip(2) {
-        let _ = fs::remove_dir_all(p);
-    }
-}
-
-fn download(v: &str) -> Result<(), String> {
-    if installed(v) {
+fn download(base_dir: &Path, v: &str) -> Result<(), String> {
+    if installed(base_dir, v) {
         return Ok(());
+    }
+    if version_dir_at(base_dir, v).exists() {
+        return Err(format!("runtime {v} is incomplete; refusing to overwrite it"));
     }
     let name = format!("t3-{v}-win32-x64");
     let base = format!("https://github.com/{REPO}/releases/download/v{v}");
@@ -251,8 +285,7 @@ fn download(v: &str) -> Result<(), String> {
         .and_then(|l| l.split_whitespace().next())
         .ok_or(format!("{name}.zip not in SHA256SUMS"))?
         .to_lowercase();
-    let tmp = root().join("versions").join(format!("{v}.partial"));
-    let _ = fs::remove_dir_all(&tmp);
+    let tmp = root().join(format!("seed-{v}-{}-{}", std::process::id(), now_unix()));
     fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let zip_path = tmp.join("server.zip");
     let mut reader = ureq::get(&format!("{base}/{name}.zip")).call().map_err(|e| format!("{name}.zip: {e}"))?.into_reader();
@@ -278,7 +311,9 @@ fn download(v: &str) -> Result<(), String> {
     if !inner.join("t3.exe").is_file() {
         return Err(format!("{name}.zip has no {name}\\t3.exe"));
     }
-    fs::rename(&inner, version_dir(v)).map_err(|e| e.to_string())?;
+    fs::write(inner.join(".install-complete"), format!("{v}\n")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(base_dir.join("runtime").join("versions")).map_err(|e| e.to_string())?;
+    fs::rename(&inner, version_dir_at(base_dir, v)).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&tmp);
     Ok(())
 }
@@ -371,13 +406,13 @@ fn resume_threads(pid: u32) {
 }
 
 fn start_server(version: &str, host: &str, port: u16, base_dir: Option<&str>) -> Result<Server, String> {
-    let dir = version_dir(version);
+    let base = service_home(base_dir);
+    let dir = version_dir_at(&base, version);
     let mut log_file = open_server_log().map_err(|e| e.to_string())?;
     let _ = writeln!(log_file, "\n=== {} t3tray starting {version} on {host}:{port}", now_unix());
     let err_file = log_file.try_clone().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(dir.join("t3.exe"));
-    cmd.args(["serve", "--host", host, "--port", &port.to_string(), "--no-browser"])
-        .args(base_dir.map(|d| ["--base-dir", d]).into_iter().flatten())
+    cmd.arg("__service-launcher")
         .current_dir(home())
         .stdin(Stdio::null())
         .stdout(log_file)
@@ -387,6 +422,8 @@ fn start_server(version: &str, host: &str, port: u16, base_dir: Option<&str>) ->
     if let Some(vars) = fresh_env() {
         cmd.env_clear().envs(vars);
     }
+    cmd.env("T3CODE_HOME", &base).env("T3CODE_HOST", host)
+        .env("T3CODE_PORT", port.to_string()).env("T3CODE_NO_BROWSER", "1");
     let child = cmd.spawn().map_err(|e| format!("spawn {}: {e}", dir.join("t3.exe").display()))?;
     unsafe {
         let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
@@ -575,7 +612,7 @@ fn icon_preview(out: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 enum Msg {
-    Target(Result<String, String>),
+    Seed(Result<String, String>),
     // The server answered HTTP 200; carries the startedAt it belongs to.
     Ready(u64),
 }
@@ -606,7 +643,7 @@ struct App {
     started_at: u64,
     ready: bool,
     last_exit: Option<i32>,
-    target: Option<String>,
+    service_state: Option<ServiceState>,
     message: String,
     checking: bool,
     last_check: Option<Instant>,
@@ -626,17 +663,9 @@ impl App {
         }
     }
 
-    fn update_ready(&self) -> Option<&str> {
-        let t = self.target.as_deref()?;
-        let s = self.server.as_ref()?;
-        (s.version != t && installed(t)).then_some(t)
-    }
-
     fn pick_version(&self) -> Option<String> {
-        match &self.target {
-            Some(t) if installed(t) => Some(t.clone()),
-            _ => newest_installed(),
-        }
+        let state = self.service_state.as_ref()?;
+        installed(&service_home(self.base_dir.as_deref()), &state.active_version).then(|| state.active_version.clone())
     }
 
     fn start(&mut self) {
@@ -654,7 +683,6 @@ impl App {
                 self.ready = false;
                 probe_ready(&self.host, self.port, self.started_at, self.tx.clone());
                 self.message.clear();
-                prune(&v);
             }
             Err(e) => {
                 log(&format!("start failed: {e}"));
@@ -678,13 +706,23 @@ impl App {
         self.checking = true;
         self.last_check = Some(Instant::now());
         let tx = self.tx.clone();
+        let base = service_home(self.base_dir.as_deref());
         std::thread::spawn(move || {
-            let r = target_version().and_then(|v| download(&v).map(|_| v));
-            let _ = tx.send(Msg::Target(r));
+            let r = seed_service(&base);
+            let _ = tx.send(Msg::Seed(r));
         });
     }
 
     fn tick(&mut self) {
+        match read_service_state(&service_home(self.base_dir.as_deref())) {
+            Ok(state) => {
+                self.service_state = state;
+                if let (Some(server), Some(state)) = (&mut self.server, &self.service_state) {
+                    server.version = state.active_version.clone();
+                }
+            }
+            Err(e) => self.message = e,
+        }
         if let Some(s) = &mut self.server {
             if let Ok(Some(st)) = s.child.try_wait() {
                 let code = st.code();
@@ -711,12 +749,9 @@ impl App {
 
     fn on_msg(&mut self, m: Msg) {
         match m {
-            Msg::Target(Ok(v)) => {
+            Msg::Seed(Ok(v)) => {
                 self.checking = false;
-                if self.target.as_deref() != Some(&v) {
-                    log(&format!("target version {v}"));
-                }
-                self.target = Some(v);
+                log(&format!("launcher runtime ready {v}"));
                 if self.message.starts_with("update") || self.message.starts_with("downloading") {
                     self.message.clear();
                 }
@@ -727,7 +762,7 @@ impl App {
                     log("server answered HTTP 200");
                 }
             }
-            Msg::Target(Err(e)) => {
+            Msg::Seed(Err(e)) => {
                 self.checking = false;
                 log(&format!("update check failed: {e}"));
                 self.message = format!("update check failed: {e}");
@@ -738,17 +773,15 @@ impl App {
     fn state_json(&self) -> String {
         serde_json::json!({
             "status": self.status(),
-            "version": self.server.as_ref().map(|s| s.version.clone()),
+            "version": self.service_state.as_ref().map(|s| &s.active_version),
+            "serviceUpdate": self.service_state.as_ref().and_then(|s| s.update.as_ref()),
             "serverPid": self.server.as_ref().map(|s| s.child.id()),
             "trayPid": std::process::id(),
             "host": self.host,
             "port": self.port,
             "startedAt": self.started_at,
             "lastExit": self.last_exit,
-            "targetVersion": self.target,
-            // The target's server is downloaded and can start now.
-            "targetInstalled": self.target.as_deref().is_some_and(installed),
-            "updateReady": self.update_ready(),
+            "serviceState": service_home(self.base_dir.as_deref()).join("runtime").join("service-state.json"),
             "message": self.message,
             "logs": root().join("logs").to_string_lossy(),
         })
@@ -772,7 +805,7 @@ struct Ui {
 
 impl Ui {
     fn refresh(&mut self, app: &App) {
-        let light = match (app.server.is_some() && app.ready, app.update_ready().is_some() || !app.message.is_empty()) {
+        let light = match (app.server.is_some() && app.ready, app.service_state.as_ref().and_then(|s| s.update.as_ref()).is_some_and(|u| u["status"] == "pending") || !app.message.is_empty()) {
             (true, false) => Light::Green,
             (true, true) => Light::Amber,
             (false, _) if app.want_running => Light::Amber,
@@ -794,14 +827,15 @@ impl Ui {
             Some(s) => format!("T3 server starting {}", s.version),
             None => format!("T3 server {}", app.status()),
         };
+        let head = match app.service_state.as_ref().and_then(|s| s.update.as_ref()) {
+            Some(u) => format!("{head} [{}]", u["status"].as_str().unwrap_or("unknown")),
+            None => head,
+        };
         let tip = if app.message.is_empty() { head.clone() } else { format!("{head}\n{}", app.message) };
         let tip: String = tip.chars().take(120).collect();
         self.status.set_text(&head);
         let _ = self.tray.set_tooltip(Some(&tip));
-        self.restart.set_text(match app.update_ready() {
-            Some(v) => format!("Restart onto {v}"),
-            None => "Restart server".into(),
-        });
+        self.restart.set_text("Restart server");
         self.toggle.set_text(if app.want_running { "Stop server" } else { "Start server" });
         self.update.set_enabled(!app.checking);
         let state = app.state_json();
@@ -859,7 +893,7 @@ fn main() {
         started_at: 0,
         ready: false,
         last_exit: None,
-        target: None,
+        service_state: None,
         message: String::new(),
         checking: false,
         last_check: None,
@@ -870,7 +904,7 @@ fn main() {
     let status = MenuItem::new("T3 server", false, None);
     let restart = MenuItem::new("Restart server", true, None);
     let toggle = MenuItem::new("Stop server", true, None);
-    let update = MenuItem::new("Check for update", true, None);
+    let update = MenuItem::new("Check launcher runtime", true, None);
     let logs = MenuItem::new("Open logs", true, None);
     let quit = MenuItem::new("Quit", true, None);
     let sep1 = PredefinedMenuItem::separator();
@@ -879,8 +913,7 @@ fn main() {
     let tray = TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("T3 server").with_icon(Icon::from_rgba(icon_pixels(Light::Amber, None), 32, 32).expect("icon")).build().expect("tray");
     let mut ui = Ui { tray, status, restart, toggle, update, logs, quit, light: None, last_state: String::new(), icon_dir: None, favicon: None };
 
-    // Start on the newest local version right away; the first check may move it later.
-    app.target = desktop_version();
+    app.service_state = read_service_state(&service_home(app.base_dir.as_deref())).ok().flatten();
     let mut quitting = false;
     while !quitting {
         unsafe {
