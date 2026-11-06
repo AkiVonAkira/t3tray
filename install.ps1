@@ -1,4 +1,4 @@
-﻿# Requires Windows 10/11 x64 and Windows PowerShell 5.1 or newer.
+# Requires Windows 10/11 x64 and Windows PowerShell 5.1 or newer.
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Console UI output intentionally bypasses the success pipeline.')]
 param(
     [string]$Version = $env:T3TRAY_VERSION,
@@ -23,7 +23,7 @@ $installerRoot = $PSScriptRoot
 $sourceBase = 'https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/installer'
 foreach ($name in @('config.ps1', 'ui.ps1', 'verify.ps1')) {
     if ($installerRoot) { . (Join-Path $installerRoot "installer/$name") }
-    else { . ([scriptblock]::Create((Invoke-RestMethod "$sourceBase/$name"))) }
+    else { . ([scriptblock]::Create(([string](Invoke-RestMethod "$sourceBase/$name")).TrimStart([char]0xFEFF))) }
 }
 $interactive = Test-T3TrayInteractive $PSBoundParameters @(Get-ChildItem Env: | Select-Object -ExpandProperty Name)
 $legacyArgs = @{ Version = $Version; ListenHost = $ListenHost; Port = $Port; Channel = $Channel
@@ -31,7 +31,7 @@ $legacyArgs = @{ Version = $Version; ListenHost = $ListenHost; Port = $Port; Cha
 $config = New-T3TrayConfig -Channel $Channel -ListenHost $ListenHost -Port $Port -Retire $RetireWinT3Service
 if ($interactive) {
     try { $config = Invoke-T3TrayWizard (Get-T3TrayDetection) }
-    catch { if ($_.Exception.Message -eq 'cancelled') { Write-Host '■  Cancelled. No changes made.'; return }; throw }
+    catch { if ($_.Exception.Message -eq 'cancelled') { Write-Host "$([char]0x25A0)  Cancelled. No changes made."; return }; throw }
     $legacyArgs.ListenHost = $config.ListenHost
     $legacyArgs.Port = $config.Port
     $legacyArgs.Channel = $config.Channel
@@ -41,13 +41,13 @@ if ($interactive) {
 }
 if ($DryRun) {
     if ($interactive) {
-        Write-T3TrayFrame 'dry-run' @(Get-T3TrayPlan $config $NoStart | ForEach-Object { "○  $_  planned" }) 'No changes made. Verification is planned, not performed.'
+        Write-T3TrayFrame 'dry-run' @(Get-T3TrayPlan $config $NoStart | ForEach-Object { "$([char]0x25CB)  $_  planned" }) 'No changes made. Verification is planned, not performed.'
         return
     }
-    Write-Host '┌  t3tray  windows'
-    Write-Host '◇  dry-run. No changes made.'
+    Write-Host "$([char]0x250C)  t3tray  windows"
+    Write-Host "$([char]0x25C7)  dry-run. No changes made."
     foreach ($step in Get-T3TrayPlan $config $NoStart) { Write-T3TrayStep $step planned }
-    Write-Host '└  Plan complete. Verification is planned, not performed.'
+    Write-Host "$([char]0x2514)  Plan complete. Verification is planned, not performed."
     return
 }
 if ($env:OS -ne 'Windows_NT') { throw 't3tray requires Windows.' }
@@ -62,5 +62,5 @@ if ($interactive -and $config.Firewall) {
     }
 }
 if ($installerRoot) { & (Join-Path $installerRoot 'installer/legacy-install.ps1') @legacyArgs }
-else { & ([scriptblock]::Create((Invoke-RestMethod "$sourceBase/legacy-install.ps1"))) @legacyArgs }
+else { & ([scriptblock]::Create(([string](Invoke-RestMethod "$sourceBase/legacy-install.ps1")).TrimStart([char]0xFEFF))) @legacyArgs }
 if ($interactive -and -not $NoStart) { Invoke-T3TrayVerification $config }

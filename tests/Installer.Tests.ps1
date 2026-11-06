@@ -111,3 +111,24 @@ Describe 'Wizard branches' {
         Should -Invoke Read-T3TrayChoice -Times 0 -ParameterFilter { $Title -eq 'retire win-t3service' }
     }
 }
+Describe 'Streamed entry scripts' {
+    It 'loads BOM-prefixed helpers without a script directory' {
+        $root = (Resolve-Path "$PSScriptRoot/..").Path.Replace("'", "''")
+        $command = @'
+$ErrorActionPreference = 'Stop'
+$root = '__ROOT__'
+function Invoke-RestMethod {
+    param($Uri)
+    $name = ([uri]$Uri).Segments[-1]
+    return [string][char]0xFEFF + [IO.File]::ReadAllText((Join-Path $root "installer/$name"))
+}
+$source = [IO.File]::ReadAllText((Join-Path $root 'install.ps1'))
+& ([scriptblock]::Create($source)) -DryRun -NonInteractive
+'@
+        $command = $command.Replace('__ROOT__', $root)
+        $shell = (Get-Process -Id $PID).Path
+        $output = & $shell -NoProfile -Command $command 2>&1 | Out-String
+        $LASTEXITCODE | Should -Be 0 -Because $output
+        $output | Should -Match 'No changes made'
+    }
+}
