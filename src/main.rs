@@ -561,11 +561,10 @@ fn download(base_dir: &Path, v: &str) -> Result<(), String> {
         .and_then(|l| l.split_whitespace().next())
         .ok_or(format!("{name}.zip not in SHA256SUMS"))?
         .to_lowercase();
-    let tmp = base_dir.join("runtime").join(format!(
-        "seed-{v}-{}-{}",
-        std::process::id(),
-        now_unix()
-    ));
+    let tmp =
+        base_dir
+            .join("runtime")
+            .join(format!("seed-{v}-{}-{}", std::process::id(), now_unix()));
     fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let zip_path = tmp.join("server.zip");
     let mut reader = ureq::get(&format!("{base}/{name}.zip"))
