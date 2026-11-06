@@ -40,6 +40,16 @@ if ($config.Channel -ne 'nightly' -or $config.ListenHost -ne '0.0.0.0' -or -not 
     throw "Wizard returned the wrong configuration: $($config | ConvertTo-Json -Compress)"
 }
 
+Add-PreviewKey $enter $enter                            # existing install: update with current settings, then update
+$saved = New-T3TrayConfig -Channel nightly -ListenHost '0.0.0.0' -Port 4100 -BaseDir 'D:\T3 Home' -StartAtSignIn $false
+$existing = [pscustomobject]@{ Config = $saved; Installed = $true; RunValue = ''
+    Desktop = '0.0.20-nightly.20261101.4 (nightly)'; DesktopChannel = 'nightly'; PortOwner = 'Available' }
+$updated = Invoke-T3TrayWizard $existing
+if ($script:keys.Count) { throw "$($script:keys.Count) scripted keys were not read." }
+if (($updated | ConvertTo-Json -Compress) -ne ($saved | ConvertTo-Json -Compress)) {
+    throw "Update did not keep the saved configuration: $($updated | ConvertTo-Json -Compress)"
+}
+
 $profileBefore = $env:USERPROFILE
 $env:USERPROFILE = 'C:\Users\Example'
 try {

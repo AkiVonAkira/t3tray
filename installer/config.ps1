@@ -23,11 +23,16 @@ function New-T3TrayConfig {
         StartAtSignIn = $StartAtSignIn; Firewall = ($Firewall -and $ListenHost -eq '0.0.0.0') }
 }
 
+# Without a sign-in entry, the last tray state holds the settings, as t3tray update reads them.
 function ConvertFrom-T3TrayRunValue {
-    param([string]$RunValue, [string]$DesktopChannel = 'stable')
+    param([string]$RunValue, [string]$DesktopChannel = 'stable', $State)
     $values = @{ Channel = $DesktopChannel }
-    foreach ($pair in @(@('host', 'ListenHost'), @('port', 'Port'), @('channel', 'Channel'), @('base-dir', 'BaseDir'))) {
+    foreach ($pair in @(@('host', 'ListenHost', 'host'), @('port', 'Port', 'port'), @('channel', 'Channel', 'channel'), @('base-dir', 'BaseDir', 'baseDir'))) {
         if ($RunValue -match ('--' + $pair[0] + '\s+(?:"([^"]*)"|([^\s"]+))')) { $values[$pair[1]] = "$($Matches[1])$($Matches[2])" }
+        elseif (-not $RunValue -and $State) {
+            $value = $State.($pair[2])
+            if ($null -ne $value -and "$value") { $values[$pair[1]] = "$value" }
+        }
     }
     New-T3TrayConfig @values
 }
@@ -46,7 +51,12 @@ function Get-T3TrayDetection {
         $result.DesktopChannel = if ($version -match 'nightly') { 'nightly' } else { 'stable' }
         $result.Desktop = "$version ($($result.DesktopChannel))"
     }
-    $result.Config = ConvertFrom-T3TrayRunValue $result.RunValue $result.DesktopChannel
+    $state = $null
+    if (-not $result.RunValue) {
+        try { $state = Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '.t3tray\state.json') -ErrorAction Stop | ConvertFrom-Json }
+        catch { Write-Verbose 'No readable tray state. Using default settings.' }
+    }
+    $result.Config = ConvertFrom-T3TrayRunValue $result.RunValue $result.DesktopChannel $state
     if ($result.Installed) { $result.Config.StartAtSignIn = [bool]$result.RunValue }
     $result.PortOwner = Get-T3TrayPortOwner $result.Config.Port
     return $result

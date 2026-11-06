@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.1
+
+- Offer **Update with current settings** when the installer wizard finds an existing install. It skips configuration and the firewall step and keeps the saved channel, address, port, T3 home, and sign-in setting. **Change settings and reinstall** keeps the full wizard. A first install is unchanged.
+- Read saved settings from `.t3tray\state.json` when sign-in startup is off, so the wizard no longer falls back to defaults for that install.
+
 ## v0.2.0
 
 - Add `t3tray update`. It downloads the release installer, checks it against `SHA256SUMS`, and reinstalls with the saved channel, address, port, T3 home, and sign-in setting. `--version` pins a release from v0.2.0 on.

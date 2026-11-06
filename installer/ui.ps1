@@ -197,17 +197,23 @@ function Get-T3TrayReview {
 function Invoke-T3TrayWizard {
     param($Detection)
     Initialize-T3TrayConsole
-    $config = $Detection.Config
+    $saved = $Detection.Config
+    $config = $saved.PSObject.Copy()
+    $update = $false
     $step = 'Check'
     $listenChoice = if ($config.ListenHost -eq '127.0.0.1') { 0 } elseif ($config.ListenHost -eq '0.0.0.0') { 1 } else { 2 }
     while ($true) {
         switch ($step) {
             'Check' {
-                $choice = Read-T3TrayChoice 'check' @('Configure and install') 0 @(Format-T3TrayTable ([ordered]@{
+                $options = if ($Detection.Installed) { @('Update with current settings', 'Change settings and reinstall') } else { @('Configure and install') }
+                $choice = Read-T3TrayChoice 'check' $options 0 @(Format-T3TrayTable ([ordered]@{
                     'Existing t3tray install' = $Detection.Installed; 'Run value' = $Detection.RunValue
                     'T3 desktop' = $Detection.Desktop
-                    "Port $($config.Port)" = $Detection.PortOwner }))
-                if ($choice -ge 0) { $step = 'Channel' }
+                    "Port $($saved.Port)" = $Detection.PortOwner }))
+                if ($choice -ge 0) {
+                    $update = $Detection.Installed -and $choice -eq 0
+                    $step = if ($update) { 'Review' } else { 'Channel' }
+                }
             }
             'Channel' {
                 $choice = Read-T3TrayChoice 'channel' @('Stable', 'Nightly') ([int]($config.Channel -eq 'nightly'))
@@ -245,10 +251,12 @@ function Invoke-T3TrayWizard {
                 }
             }
             'Review' {
-                $owner = Get-T3TrayPortOwner $config.Port
-                $choice = Read-T3TrayChoice 'review' @('Install', 'Go back') 0 @(Get-T3TrayReview $config $owner)
-                if ($choice -ne 0) { $step = 'Startup' }
-                else { return (New-T3TrayConfig -Channel $config.Channel -ListenHost $config.ListenHost -Port $config.Port -BaseDir $config.BaseDir -StartAtSignIn $config.StartAtSignIn -Firewall $config.Firewall) }
+                $final = if ($update) { $saved } else { $config }
+                $final = New-T3TrayConfig -Channel $final.Channel -ListenHost $final.ListenHost -Port $final.Port -BaseDir $final.BaseDir -StartAtSignIn $final.StartAtSignIn -Firewall ($final.Firewall -and -not $update)
+                $action = if ($update) { 'Update' } elseif ($Detection.Installed) { 'Reinstall' } else { 'Install' }
+                $choice = Read-T3TrayChoice 'review' @($action, 'Go back') 0 @(Get-T3TrayReview $final (Get-T3TrayPortOwner $final.Port))
+                if ($choice -eq 0) { return $final }
+                $step = if ($update) { 'Check' } else { 'Startup' }
             }
         }
     }

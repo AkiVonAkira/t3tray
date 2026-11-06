@@ -72,8 +72,10 @@ update t3tray itself. It keeps the listen address, port, channel, T3 home, and
 sign-in startup setting. Updating the desktop app does not update this standalone
 server.
 
-t3tray v0.1.1 and older have no `update` command. Re-run the installer once to
-reach v0.2.0. The installer reads the existing sign-in entry and suggests its settings.
+Re-running the installer also updates t3tray. On an existing install the wizard
+offers **Update with current settings**, which skips configuration, or
+**Change settings and reinstall**. t3tray v0.1.1 and older have no `update`
+command, so re-run the installer once to reach v0.2.0 or newer.
 
 If setup fails, read the failed step and check these logs:
 
