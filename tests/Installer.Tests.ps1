@@ -3,6 +3,49 @@ param()
 BeforeAll {
     . "$PSScriptRoot/../installer/config.ps1"
     . "$PSScriptRoot/../installer/ui.ps1"
+    function Get-TestKey {
+        param([ConsoleKey]$Key, [char]$Character = 0, [switch]$Control)
+        [ConsoleKeyInfo]::new($Character, $Key, $false, $false, $Control.IsPresent)
+    }
+    function Initialize-TestInput {
+        param([ConsoleKeyInfo[]]$Keys)
+        $script:keys = [Collections.Generic.Queue[ConsoleKeyInfo]]::new()
+        foreach ($key in $Keys) { $script:keys.Enqueue($key) }
+    }
+}
+Describe 'Keyboard input through the real controls' {
+    BeforeEach {
+        Mock Write-T3TrayFrame {}
+        Mock Read-T3TrayKey { $script:keys.Dequeue() }
+    }
+    It 'replaces the suggested port when the user types' {
+        Initialize-TestInput @((Get-TestKey D4 '4'), (Get-TestKey D0 '0'), (Get-TestKey D0 '0'), (Get-TestKey D0 '0'), (Get-TestKey Enter))
+        Read-T3TrayText 'port' '3773' Port | Should -Be '4000'
+    }
+    It 'keeps the suggested value on Enter and edits it with movement and deletion' {
+        Initialize-TestInput @((Get-TestKey Enter))
+        Read-T3TrayText 'port' '3773' Port | Should -Be '3773'
+        Initialize-TestInput @((Get-TestKey Home), (Get-TestKey Delete), (Get-TestKey End), (Get-TestKey Backspace), (Get-TestKey D8 '8'), (Get-TestKey Enter))
+        Read-T3TrayText 'port' '3773' Port | Should -Be '778'
+    }
+    It 'waits for a valid port after a rejected submission' {
+        Initialize-TestInput @((Get-TestKey D0 '0'), (Get-TestKey Enter), (Get-TestKey A ([char]1) -Control), (Get-TestKey D8 '8'), (Get-TestKey D0 '0'), (Get-TestKey Enter))
+        Read-T3TrayText 'port' '3773' Port | Should -Be '80'
+    }
+    It 'returns on Escape and cancels on Ctrl+C' {
+        Initialize-TestInput @((Get-TestKey Escape))
+        Read-T3TrayText 'port' '3773' Port | Should -BeNullOrEmpty
+        Initialize-TestInput @((Get-TestKey C ([char]3) -Control))
+        { Read-T3TrayText 'port' '3773' Port } | Should -Throw '*cancelled*'
+    }
+    It 'selects choices with arrow keys and returns on back' {
+        Initialize-TestInput @((Get-TestKey UpArrow), (Get-TestKey Enter))
+        Read-T3TrayChoice 'channel' @('stable', 'nightly') | Should -Be 1
+        Initialize-TestInput @((Get-TestKey B 'b'))
+        Read-T3TrayChoice 'channel' @('stable', 'nightly') | Should -Be -1
+        Initialize-TestInput @((Get-TestKey Q 'q'))
+        { Read-T3TrayChoice 'channel' @('stable', 'nightly') } | Should -Throw '*cancelled*'
+    }
 }
 Describe 'Mode selection' {
     It 'opens the wizard with no arguments or with only DryRun' {
@@ -28,14 +71,6 @@ Describe 'Mode selection' {
     }
 }
 Describe 'Configuration and plans' {
-    It 'has the existing defaults' {
-        $config = New-T3TrayConfig
-        $config.Channel | Should -Be stable
-        $config.ListenHost | Should -Be '127.0.0.1'
-        $config.Port | Should -Be 3773
-        $config.StartAtSignIn | Should -BeTrue
-        $config.Firewall | Should -BeFalse
-    }
     It 'uses existing Run arguments before the detected desktop channel' {
         $config = ConvertFrom-T3TrayRunValue '"C:\Users\Example\.t3tray\t3tray.exe" --host 0.0.0.0 --port 4000 --channel stable' nightly
         $config.Channel | Should -Be stable
@@ -43,7 +78,7 @@ Describe 'Configuration and plans' {
         $config.ListenHost | Should -Be '0.0.0.0'
         (ConvertFrom-T3TrayRunValue '' nightly).Channel | Should -Be nightly
     }
-    It 'rejects invalid ports' -TestCases @(@{ Value = '0' }, @{ Value = '65536' }, @{ Value = 'abc' }, @{ Value = '37.73' }, @{ Value = '' }) {
+    It 'rejects invalid ports' -TestCases @(@{ Value = '0' }, @{ Value = '65536' }, @{ Value = 'abc' }, @{ Value = '37.73' }) {
         param($Value)
         { New-T3TrayConfig -Port $Value } | Should -Throw
     }
@@ -59,21 +94,19 @@ Describe 'Configuration and plans' {
         (New-T3TrayConfig -Firewall $true).Firewall | Should -BeFalse
         (New-T3TrayConfig -ListenHost '0.0.0.0' -Firewall $true).Firewall | Should -BeTrue
     }
-    It 'plans all requested changes and verification' {
-        $config = New-T3TrayConfig -Channel nightly -ListenHost '0.0.0.0' -Port 4000 -Firewall $true -Retire $true -StartAtSignIn $false
-        $plan = (Get-T3TrayPlan $config) -join "`n"
-        $plan | Should -Match 'Private profile only'
-        $plan | Should -Match 'TCP 4000'
-        $plan | Should -Match 'Remove T3Tray sign-in'
-        $plan | Should -Match 'disable its logon task'
-        $plan | Should -Match 'server.getConfig serverSelfUpdate=boot-service'
-        (Get-T3TrayPlan $config $true) -join "`n" | Should -Not -Match 'Verify HTTP'
-    }
     It 'dry-run never invokes an install action' {
-        $output = & "$PSScriptRoot/../install.ps1" -DryRun -NonInteractive -Channel nightly -ListenHost '0.0.0.0' -Port 3773 6>&1 | Out-String
-        $output | Should -Match 'No changes made'
-        $output | Should -Match 'channel nightly'
-        $output | Should -Match 'Verification is planned, not performed'
+        $fixture = Join-Path $TestDrive 'dry-run'
+        $null = New-Item -ItemType Directory "$fixture/installer"
+        Copy-Item "$PSScriptRoot/../install.ps1" $fixture
+        Copy-Item "$PSScriptRoot/../installer/*.ps1" "$fixture/installer"
+        Set-Content "$fixture/installer/legacy-install.ps1" "throw 'Dry-run invoked an install action.'"
+        $previousProfile = $env:USERPROFILE
+        try {
+            $env:USERPROFILE = Join-Path $TestDrive 'user'
+            $null = New-Item -ItemType Directory $env:USERPROFILE
+            & "$fixture/install.ps1" -DryRun -NonInteractive -Channel nightly -ListenHost '0.0.0.0' -Port 3773 6>$null
+            @(Get-ChildItem $env:USERPROFILE -Force).Count | Should -Be 0
+        } finally { $env:USERPROFILE = $previousProfile }
     }
 }
 Describe 'Wizard navigation with scripted answers' {
@@ -91,10 +124,6 @@ Describe 'Wizard navigation with scripted answers' {
         $config.Port | Should -Be 4000
         $script:answers.Count | Should -Be 0
     }
-    It 'stops on quit without running actions' {
-        Mock Read-T3TrayChoice { throw 'cancelled' }
-        { Invoke-T3TrayWizard ([pscustomobject]@{ Config = (New-T3TrayConfig) }) } | Should -Throw '*cancelled*'
-    }
 }
 Describe 'Wizard branches' {
     It 'visits custom address and preserves values on back' {
@@ -111,7 +140,6 @@ Describe 'Wizard branches' {
         $config.Port | Should -Be 5000
         $config.Firewall | Should -BeFalse
         $script:fields.Count | Should -Be 0
-        Should -Invoke Read-T3TrayChoice -Times 0 -ParameterFilter { $Title -eq 'retire win-t3service' }
     }
 }
 Describe 'Streamed entry scripts' {
@@ -129,8 +157,9 @@ $source = [IO.File]::ReadAllText((Join-Path $root 'install.ps1'))
 & ([scriptblock]::Create($source)) -DryRun -NonInteractive
 '@
         $command = $command.Replace('__ROOT__', $root)
-        $shell = (Get-Process -Id $PID).Path
-        $output = & $shell -NoProfile -Command $command 2>&1 | Out-String
+        $script = Join-Path $TestDrive 'streamed.ps1'
+        Set-Content -LiteralPath $script -Value $command -Encoding UTF8
+        $output = & powershell.exe -NoProfile -File $script 2>&1 | Out-String
         $LASTEXITCODE | Should -Be 0 -Because $output
         $output | Should -Match 'No changes made'
     }

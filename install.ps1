@@ -45,20 +45,22 @@ if ($interactive) {
 }
 if ($DryRun) {
     if ($interactive) {
-        Write-T3TrayFrame 'dry-run' @(Get-T3TrayPlan $config $NoStart | ForEach-Object { "$([char]0x25CB)  $_  planned" }) 'No changes made. Verification is planned, not performed.'
+        Write-T3TrayFrame 'dry-run' @(Get-T3TrayReview $config '' $NoStart) 'No changes made. Verification is planned, not performed.'
         return
     }
-    Write-Host "$([char]0x250C)  t3tray  windows"
-    Write-Host "$([char]0x25C7)  dry-run. No changes made."
-    foreach ($step in Get-T3TrayPlan $config $NoStart) { Write-T3TrayStep $step planned }
-    Write-Host "$([char]0x2514)  Plan complete. Verification is planned, not performed."
+    Write-Host 'dry-run. No changes made.'
+    foreach ($line in Get-T3TrayReview $config '' $NoStart) { Write-Host "  $line" }
+    Write-Host 'Plan complete. Verification is planned, not performed.'
     return
 }
 if ($env:OS -ne 'Windows_NT') { throw 't3tray requires Windows.' }
-if ($interactive) { Write-T3TrayFrame 'install' @() 'Working. A failed step stops the installer.' }
+if ($interactive) {
+    Write-T3TrayHeader 'install' -Clear
+    Write-T3TrayNote 'A failed step stops the installer.'
+}
 if ($interactive -and $config.Firewall) {
+    Write-T3TrayNote "Windows will ask for administrator approval to allow TCP $($config.Port) on Private networks."
     Invoke-T3TrayStep 'Private firewall rule (UAC)' {
-        Write-Host "Windows will ask for administrator approval to allow TCP $($config.Port) on Private networks."
         $command = "`$ErrorActionPreference='Stop'; try { Get-NetFirewallRule -Name 'T3Tray-$($config.Port)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule; New-NetFirewallRule -Name 'T3Tray-$($config.Port)' -DisplayName 't3tray TCP $($config.Port)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $($config.Port) -Profile Private | Out-Null; exit 0 } catch { exit 1 }"
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
         $child = Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -EncodedCommand $encoded" -Wait -PassThru
@@ -68,3 +70,5 @@ if ($interactive -and $config.Firewall) {
 if ($localHelpers) { & (Join-Path $installerRoot 'installer/legacy-install.ps1') @legacyArgs }
 else { & ([scriptblock]::Create(([string](Invoke-RestMethod "$sourceBase/legacy-install.ps1")).TrimStart([char]0xFEFF))) @legacyArgs }
 if ($interactive -and -not $NoStart) { Invoke-T3TrayVerification $config }
+$summaryConfig = [pscustomobject]@{ ListenHost = $legacyArgs.ListenHost; Port = $legacyArgs.Port; Channel = $legacyArgs.Channel }
+Write-T3TrayInstallSummary $summaryConfig -NoStart $NoStart.IsPresent -Verified $interactive -Framed $interactive

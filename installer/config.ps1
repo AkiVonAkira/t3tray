@@ -62,20 +62,36 @@ function Get-T3TrayPortOwner {
     }) | Select-Object -Unique) -join ', '
 }
 
-function Get-T3TrayPlan {
+function Get-T3TrayLocalUrl {
+    param([string]$ListenHost, [int]$Port)
+    $address = $ListenHost.Trim('[', ']')
+    if ($address -in @('', '0.0.0.0', '::', '*')) { $address = '127.0.0.1' }
+    elseif ($address.Contains(':')) { $address = "[$address]" }
+    "http://${address}:$Port/"
+}
+
+function Get-T3TrayStatusCommand {
+    param([string]$PathValue = $env:Path, [string]$BinDir = (Join-Path $env:USERPROFILE '.t3\bin'))
+    $entries = @($PathValue -split ';' | ForEach-Object { $_.Trim().TrimEnd('\') })
+    if ($entries -contains $BinDir.TrimEnd('\')) { return 't3tray status' }
+    "& `"$(Join-Path $BinDir 't3tray.cmd')`" status"
+}
+
+function Get-T3TrayPlanStep {
     param($Config, [bool]$NoStart = $false)
-    if ($Config.Firewall) { "Request UAC to allow TCP $($Config.Port) on Windows Firewall Private profile only" }
-    'Download release assets (or use supplied assets)'
-    'Verify t3tray.exe SHA-256 before replacing anything'
-    'Stop existing tray and copy executable'
-    if ($Config.Retire) { 'Stop win-t3service, disable its logon task, remove its wrapper' }
-    'Write t3tray.cmd wrapper'
-    if ($Config.StartAtSignIn) { 'Set T3Tray sign-in Run value' } else { 'Remove T3Tray sign-in Run value' }
-    "Arguments --host $($Config.ListenHost) --port $($Config.Port) --channel $($Config.Channel)"
-    if (-not $NoStart) {
-        'Start tray through a temporary interactive scheduled task'
-        'Verify tray process and t3tray status running'
-        "Verify HTTP 200 at http://127.0.0.1:$($Config.Port)/"
-        'Verify server.getConfig serverSelfUpdate=boot-service'
-    }
+    $changes = @(
+        if ($Config.Firewall) { "Allow TCP $($Config.Port) in Windows Firewall, Private networks only (UAC)" }
+        'Get t3tray.exe and check its SHA-256 before replacing anything'
+        'Stop the running tray and replace t3tray.exe'
+        if ($Config.Retire) { 'Stop and disable win-t3service' }
+        'Write the t3tray command wrapper'
+        if ($Config.StartAtSignIn) { 'Set the sign-in entry' } else { 'Remove the sign-in entry' }
+        if (-not $NoStart) { 'Start the tray' })
+    $checks = @(if (-not $NoStart) {
+        'Tray process and t3tray status'
+        "HTTP 200 at $(Get-T3TrayLocalUrl $Config.ListenHost $Config.Port)"
+        'server.getConfig reports boot-service updates'
+    })
+    foreach ($text in $changes) { [pscustomobject]@{ Group = 'Changes'; Text = $text } }
+    foreach ($text in $checks) { [pscustomobject]@{ Group = 'Checks'; Text = $text } }
 }

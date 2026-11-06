@@ -5,7 +5,7 @@
 // install folder while the server runs. Upstream's service launcher owns server updates.
 //
 //   t3tray.exe [--host H] [--port P] [--base-dir D] [--channel stable|nightly]  run the tray (one per user session)
-//   t3tray.exe status                         print the running tray's state
+//   t3tray.exe status [--json]                print the running tray's state
 //   t3tray.exe restart|stop|start|quit signal the running tray
 //
 // Logs and tray state live in %USERPROFILE%\.t3tray; runtimes live in .t3\runtime.
@@ -22,6 +22,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 use t3tray::channel::Channel;
+use t3tray::status::{
+    format_status, local_host, not_running_json, parse_status_args, StatusFormat,
+};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use windows_sys::Win32::Foundation::*;
@@ -84,23 +87,41 @@ fn event_name(cmd: &str) -> Vec<u16> {
 
 // ---------- CLI side ----------
 
-fn cli(cmd: &str) -> i32 {
+fn status(args: &[String]) -> i32 {
+    let format = match parse_status_args(args) {
+        Ok(format) => format,
+        Err(usage) => {
+            eprintln!("{usage}");
+            return 2;
+        }
+    };
+    let state = fs::read_to_string(root().join("state.json"))
+        .ok()
+        .filter(|_| tray_running())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    match (state, format) {
+        (Some(state), StatusFormat::Json) => println!("{state}"),
+        (Some(state), StatusFormat::Human) => println!("{}", format_status(&state)),
+        (None, StatusFormat::Json) => {
+            println!("{}", not_running_json());
+            return 3;
+        }
+        (None, StatusFormat::Human) => {
+            println!("t3tray is not running");
+            return 3;
+        }
+    }
+    0
+}
+
+fn cli(cmd: &str, args: &[String]) -> i32 {
     unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
     if cmd == "status" {
-        return match fs::read_to_string(root().join("state.json")) {
-            Ok(s) if tray_running() => {
-                println!("{s}");
-                0
-            }
-            _ => {
-                println!("t3tray is not running");
-                3
-            }
-        };
+        return status(args);
     }
-    if !COMMANDS.contains(&cmd) {
+    if !COMMANDS.contains(&cmd) || !args.is_empty() {
         println!(
-            "usage: t3tray [--host H] [--port P] [--base-dir D] [--channel stable|nightly] | status | {}",
+            "usage: t3tray [--host H] [--port P] [--base-dir D] [--channel stable|nightly] | status [--json] | {}",
             COMMANDS.join(" | ")
         );
         return 2;
@@ -820,11 +841,7 @@ enum Msg {
 
 // Poll the server until it answers 200, so "running" means clients can connect.
 fn probe_ready(host: &str, port: u16, started_at: u64, tx: mpsc::Sender<Msg>) {
-    let host = if host == "0.0.0.0" {
-        "127.0.0.1".to_owned()
-    } else {
-        host.to_owned()
-    };
+    let host = local_host(host);
     std::thread::spawn(move || {
         let url = format!("http://{host}:{port}/");
         let agent = ureq::AgentBuilder::new()
@@ -1111,7 +1128,7 @@ fn main() {
         return;
     }
     if let Some(cmd) = args.first().filter(|a| !a.starts_with("--")) {
-        std::process::exit(cli(cmd));
+        std::process::exit(cli(cmd, &args[1..]));
     }
     let channel = match Channel::from_args(&args) {
         Ok(channel) => channel,

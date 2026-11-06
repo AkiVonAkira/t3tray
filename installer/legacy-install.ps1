@@ -25,13 +25,22 @@ $trayDir = Join-Path $env:USERPROFILE '.t3tray'
 $exe = Join-Path $trayDir 't3tray.exe'
 $binDir = Join-Path $env:USERPROFILE '.t3\bin'
 $temporary = $null
-$stepState = @{ Label = '' }
+$stepState = @{ Label = ''; Step = $null }
+function Complete-InstallStep([string]$State) {
+    if ($stepState.Step) { Write-T3TrayStepResult $stepState.Step $State; $stepState.Step = $null }
+}
 function Write-InstallStep([string]$Label) {
     if ($ShowSteps) {
-        if ($stepState.Label) { Write-T3TrayStep $stepState.Label ok }
-        Write-T3TrayStep $Label running
+        Complete-InstallStep ok
+        $stepState.Step = Write-T3TrayStepStart $Label
     }
     $stepState.Label = $Label
+}
+# Child command output stays out of the console; it is returned for error messages.
+function Invoke-InstallCommand([scriptblock]$Command) {
+    $ErrorActionPreference = 'Continue'
+    $output = & $Command 2>&1 | ForEach-Object { "$_" } | Out-String
+    [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output.Trim() }
 }
 try {
     Write-InstallStep 'Acquire release assets'
@@ -59,7 +68,7 @@ try {
     Write-InstallStep 'Stop and replace tray'
     $running = @(Get-Process -Name t3tray -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
     if ($running.Count -gt 0) {
-        & $exe quit | Out-Host
+        $null = Invoke-InstallCommand { & $exe quit }
         $running | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue
         $running | Stop-Process -Force -ErrorAction SilentlyContinue
         $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
@@ -69,15 +78,14 @@ try {
     if ($RetireWinT3Service) {
         Write-InstallStep 'Retire win-t3service'
         $oldTask = 'T3 Code Server (User Logon)'
-        & schtasks.exe /Query /TN $oldTask *> $null
-        if ($LASTEXITCODE -eq 0) {
+        if ((Invoke-InstallCommand { & schtasks.exe /Query /TN $oldTask }).ExitCode -eq 0) {
             $oldService = Join-Path $env:USERPROFILE '.t3service\t3service.ps1'
             if (Test-Path -LiteralPath $oldService) {
-                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $oldService stop | Out-Host
-                if ($LASTEXITCODE -ne 0) { throw 'The previous service did not stop.' }
+                $result = Invoke-InstallCommand { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $oldService stop }
+                if ($result.ExitCode -ne 0) { throw "The previous service did not stop. $($result.Output)" }
             }
-            & schtasks.exe /Change /TN $oldTask /DISABLE | Out-Host
-            if ($LASTEXITCODE -ne 0) { throw 'Could not disable the previous service task.' }
+            $result = Invoke-InstallCommand { & schtasks.exe /Change /TN $oldTask /DISABLE }
+            if ($result.ExitCode -ne 0) { throw "Could not disable the previous service task. $($result.Output)" }
         }
         Remove-Item -LiteralPath (Join-Path $binDir 't3service.cmd') -ErrorAction SilentlyContinue
     }
@@ -94,7 +102,7 @@ try {
     } else {
         Remove-ItemProperty -Path $runKey -Name T3Tray -ErrorAction SilentlyContinue
     }
-    if ($NoStart) { Write-Output "Installed $exe. Start it with $runArgs."; return }
+    if ($NoStart) { Complete-InstallStep ok; return }
 
     Write-InstallStep 'Start tray'
     $scheduler = New-Object -ComObject Schedule.Service
@@ -118,14 +126,14 @@ try {
     Write-InstallStep 'Wait for server readiness'
     $deadline = (Get-Date).AddMinutes(10)
     do {
-        $state = (& $exe status | Out-String).Trim()
-        if ($state -match '"status":"running"') { Write-Output $state; if ($ShowSteps) { Write-T3TrayStep $stepState.Label ok }; return }
+        $state = (& $exe status --json | Out-String).Trim()
+        if ($state -match '"status":"running"') { Complete-InstallStep ok; return }
         Start-Sleep -Seconds 2
     } while ((Get-Date) -lt $deadline)
     throw "t3tray did not report running within 10 minutes. See $trayDir\logs. Last state $state"
 } catch {
     if ($ShowSteps) {
-        Write-T3TrayStep $stepState.Label failed
+        Complete-InstallStep failed
         throw "$($stepState.Label) failed. $($_.Exception.Message) Resolve the error and rerun. See $trayDir/logs."
     }
     throw

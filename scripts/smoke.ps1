@@ -29,7 +29,7 @@ try {
     Start-Process -FilePath $exe -ArgumentList $launchArgs
     $deadline = (Get-Date).AddMinutes(10)
     do {
-        $state = (& $exe status | Out-String).Trim()
+        $state = (& $exe status --json | Out-String).Trim()
         if ($state -match '"status":"running"') { break }
         Start-Sleep -Seconds 2
     } while ((Get-Date) -lt $deadline)
@@ -45,7 +45,7 @@ try {
     $deadline = (Get-Date).AddSeconds(30)
     do {
         Start-Sleep -Seconds 1
-        $stopped = (& $exe status | Out-String).Trim()
+        $stopped = (& $exe status --json | Out-String).Trim()
     } while ($stopped -notmatch '"status":"stopped"' -and (Get-Date) -lt $deadline)
     if ($stopped -notmatch '"status":"stopped"') { throw 'Stop command failed.' }
     $null = & $exe start | Out-String
@@ -58,7 +58,7 @@ try {
     $deadline = (Get-Date).AddMinutes(2)
     do {
         Start-Sleep -Seconds 2
-        $state = (& $exe status | Out-String).Trim()
+        $state = (& $exe status --json | Out-String).Trim()
     } while ($state -notmatch '"status":"running"' -and (Get-Date) -lt $deadline)
     if ($state -notmatch '"status":"running"') { throw 'Tray did not restart with the other channel.' }
     $restarted = $state | ConvertFrom-Json

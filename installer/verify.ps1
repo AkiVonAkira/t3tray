@@ -65,11 +65,11 @@ function Invoke-T3TrayVerification {
         if (-not $process.Count) { throw 'Tray process is missing.' }
     }
     Invoke-T3TrayStep 't3tray status' {
-        $state = (& $exe status | Out-String) | ConvertFrom-Json
+        $state = (& $exe status --json | Out-String) | ConvertFrom-Json
         if ($state.status -ne 'running') { throw 'Tray status is not running.' }
     }
     Invoke-T3TrayStep 'HTTP 200' {
-        $response = Invoke-WebRequest "http://127.0.0.1:$($Config.Port)/" -UseBasicParsing -TimeoutSec 15
+        $response = Invoke-WebRequest (Get-T3TrayLocalUrl $Config.ListenHost $Config.Port) -UseBasicParsing -TimeoutSec 15
         if ($response.StatusCode -ne 200) { throw 'Server did not return HTTP 200.' }
     }
     Invoke-T3TrayStep 'server.getConfig' {
