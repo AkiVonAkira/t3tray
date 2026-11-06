@@ -3,6 +3,9 @@ name = "t3tray"
 version = "0.1.0"
 edition = "2021"
 publish = false
+description = "Unofficial Windows tray host for the T3 Code service launcher"
+license = "MIT"
+repository = "https://github.com/AkiVonAkira/t3tray"
 
 [profile.release]
 opt-level = "s"

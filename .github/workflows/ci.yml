@@ -1,0 +1,46 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    name: Rust and reproducibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: sudo apt-get update && sudo apt-get install -y mingw-w64
+      - run: rustup show
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --target x86_64-pc-windows-gnu -- -D warnings
+      - run: bash scripts/build-reproducible.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-release
+          path: dist/
+          if-no-files-found: error
+  powershell:
+    name: PowerShell analysis
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Force -Scope CurrentUser
+          $issues = @(Invoke-ScriptAnalyzer -Path . -Recurse -Severity Warning,Error)
+          $issues | Format-Table -AutoSize
+          if ($issues.Count) { throw "PSScriptAnalyzer reported $($issues.Count) issues." }
+  smoke:
+    name: Windows install and real server
+    needs: [build, powershell]
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-release
+          path: dist/
+      - shell: powershell
+        run: ./scripts/smoke.ps1
