@@ -48,11 +48,22 @@ jobs:
         with:
           name: windows-smoke
           path: dist/
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: powershell-modules
+        with:
+          path: .tools
+          key: powershell-modules-windows-pester-5.7.1-analyzer-1.24.0
+      - name: Fetch PowerShell check dependencies
+        if: steps.powershell-modules.outputs.cache-hit != 'true'
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          Save-Module Pester -RequiredVersion 5.7.1 -Path ./.tools -Force
+          Save-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Path ./.tools -Force
       - name: Check PowerShell 5.1 scripts and installer behavior
         shell: powershell
         run: |
-          Install-Module Pester -RequiredVersion 5.7.1 -Force -Scope CurrentUser -SkipPublisherCheck
-          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Force -Scope CurrentUser
+          $env:PSModulePath = "$((Resolve-Path .tools).Path);$env:PSModulePath"
           ./scripts/check.ps1
           ./scripts/status-smoke.ps1 -ExePath ./dist/t3tray.exe
       - name: Stable install, status, HTTP, stop/start, and uninstall
