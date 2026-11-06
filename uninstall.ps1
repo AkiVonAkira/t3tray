@@ -1,18 +1,26 @@
-param([switch]$Purge)
+﻿[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Console UI output intentionally bypasses the success pipeline.')]
+param([switch]$Purge, [switch]$NonInteractive, [switch]$DryRun)
 $ErrorActionPreference = 'Stop'
-if ($env:OS -ne 'Windows_NT') { throw 't3tray requires Windows.' }
-$trayDir = Join-Path $env:USERPROFILE '.t3tray'
-$exe = Join-Path $trayDir 't3tray.exe'
-$running = @(Get-Process -Name t3tray -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
-if ($running.Count -gt 0) {
-    & $exe quit | Out-Host
-    $running | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue
-    $running | Stop-Process -Force -ErrorAction SilentlyContinue
-    $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+$sourceBase = 'https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/installer'
+foreach ($name in @('config.ps1', 'ui.ps1')) {
+    if ($PSScriptRoot) { . (Join-Path $PSScriptRoot "installer/$name") }
+    else { . ([scriptblock]::Create((Invoke-RestMethod "$sourceBase/$name"))) }
 }
-Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name T3Tray -ErrorAction SilentlyContinue
-foreach ($path in @($exe, (Join-Path $env:USERPROFILE '.t3\bin\t3tray.cmd'))) {
-    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+$interactive = Test-T3TrayInteractive $PSBoundParameters @(Get-ChildItem Env: | Select-Object -ExpandProperty Name)
+if ($interactive) {
+    try {
+        $choice = Read-T3TrayChoice 'uninstall' @('Uninstall t3tray', 'Cancel') 1 @(
+            'Stop the tray, remove sign-in startup, executable and wrapper.', 'Keep logs and T3 data. -Purge also removes tray logs.')
+        if ($choice -ne 0) { Write-Host '■  Cancelled.'; return }
+    } catch { if ($_.Exception.Message -eq 'cancelled') { Write-Host '■  Cancelled.'; return }; throw }
 }
-if ($Purge -and (Test-Path -LiteralPath $trayDir)) { Remove-Item -LiteralPath $trayDir -Recurse -Force }
-Write-Output 'Uninstalled t3tray. The T3 home and its data are unchanged.'
+if ($DryRun) {
+    foreach ($step in @('Stop tray', 'Remove sign-in startup', 'Remove executable and wrapper')) { Write-T3TrayStep $step planned }
+    if ($Purge) { Write-T3TrayStep 'Remove tray directory and logs' planned }
+    return
+}
+$action = {
+    if ($PSScriptRoot) { & (Join-Path $PSScriptRoot 'installer/legacy-uninstall.ps1') -Purge:$Purge -ShowSteps:$interactive }
+    else { & ([scriptblock]::Create((Invoke-RestMethod "$sourceBase/legacy-uninstall.ps1"))) -Purge:$Purge -ShowSteps:$interactive }
+}
+& $action

@@ -1,4 +1,5 @@
-# Requires Windows 10/11 x64 and Windows PowerShell 5.1 or newer.
+﻿# Requires Windows 10/11 x64 and Windows PowerShell 5.1 or newer.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Console UI output intentionally bypasses the success pipeline.')]
 param(
     [string]$Version = $env:T3TRAY_VERSION,
     [ValidatePattern('^[a-zA-Z0-9.:_-]+$')]
@@ -10,97 +11,50 @@ param(
     [string]$ExePath,
     [string]$AssetDir,
     [switch]$NoStart,
-    [switch]$RetireWinT3Service
+    [switch]$RetireWinT3Service,
+    [switch]$NonInteractive,
+    [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-if ($env:OS -ne 'Windows_NT') { throw 't3tray requires Windows.' }
-if (-not [Environment]::Is64BitOperatingSystem) { throw 't3tray requires 64-bit Windows.' }
-if ($ExePath -and $AssetDir) { throw 'Use either -ExePath or -AssetDir.' }
-if ($Version -and $Version -notmatch '^v?[0-9][a-zA-Z0-9.+-]*$') { throw 'Invalid release version.' }
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$trayDir = Join-Path $env:USERPROFILE '.t3tray'
-$exe = Join-Path $trayDir 't3tray.exe'
-$binDir = Join-Path $env:USERPROFILE '.t3\bin'
-$temporary = $null
-try {
-    if ($AssetDir) {
-        $ExePath = Join-Path $AssetDir 't3tray.exe'
-    } elseif (-not $ExePath) {
-        $temporary = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())
-        $null = New-Item -ItemType Directory -Path $temporary
-        $base = 'https://github.com/AkiVonAkira/t3tray/releases'
-        if ($Version) { $base += '/download/v' + $Version.TrimStart('v') } else { $base += '/latest/download' }
-        foreach ($asset in @('t3tray.exe', 'SHA256SUMS')) {
-            Invoke-WebRequest "$base/$asset" -OutFile (Join-Path $temporary $asset) -UseBasicParsing
-        }
-        $ExePath = Join-Path $temporary 't3tray.exe'
-    }
-    $ExePath = (Resolve-Path -LiteralPath $ExePath).Path
-    $sums = Join-Path (Split-Path -Parent $ExePath) 'SHA256SUMS'
-    $entries = @(Get-Content -LiteralPath $sums | Where-Object { $_ -match '^[a-fA-F0-9]{64}\s+\*?t3tray\.exe$' })
-    if ($entries.Count -ne 1) { throw 'SHA256SUMS must contain exactly one t3tray.exe entry.' }
-    $expected = ($entries[0] -split '\s+')[0]
-    if ((Get-FileHash -LiteralPath $ExePath -Algorithm SHA256).Hash -ne $expected) { throw 't3tray.exe SHA-256 mismatch.' }
-    if ($ExePath -eq $exe) { throw 'Source executable must be outside the install directory.' }
-
-    $running = @(Get-Process -Name t3tray -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
-    if ($running.Count -gt 0) {
-        & $exe quit | Out-Host
-        $running | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue
-        $running | Stop-Process -Force -ErrorAction SilentlyContinue
-        $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
-    }
-    $null = New-Item -ItemType Directory -Force -Path $trayDir, $binDir
-    Copy-Item -LiteralPath $ExePath -Destination $exe -Force
-    if ($RetireWinT3Service) {
-        $oldTask = 'T3 Code Server (User Logon)'
-        & schtasks.exe /Query /TN $oldTask *> $null
-        if ($LASTEXITCODE -eq 0) {
-            $oldService = Join-Path $env:USERPROFILE '.t3service\t3service.ps1'
-            if (Test-Path -LiteralPath $oldService) {
-                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $oldService stop | Out-Host
-                if ($LASTEXITCODE -ne 0) { throw 'The previous service did not stop.' }
-            }
-            & schtasks.exe /Change /TN $oldTask /DISABLE | Out-Host
-            if ($LASTEXITCODE -ne 0) { throw 'Could not disable the previous service task.' }
-        }
-        Remove-Item -LiteralPath (Join-Path $binDir 't3service.cmd') -ErrorAction SilentlyContinue
-    }
-    # Piping makes PowerShell wait for the GUI executable and forward its output.
-    "@echo off`r`npowershell.exe -NoLogo -NoProfile -Command `"& (Join-Path `$env:USERPROFILE '.t3tray\t3tray.exe') %* | ForEach-Object { `$_ }; exit `$LASTEXITCODE`"`r`nexit /b %ERRORLEVEL%" |
-        Set-Content -LiteralPath (Join-Path $binDir 't3tray.cmd') -Encoding ascii
-    $runArgs = "--host $ListenHost --port $Port --channel $($Channel.ToLowerInvariant())"
-    $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-    if (-not (Test-Path -LiteralPath $runKey)) { $null = New-Item -Path $runKey }
-    Set-ItemProperty -Path $runKey -Name T3Tray -Value "`"$exe`" $runArgs"
-    if ($NoStart) { Write-Output "Installed $exe. Start it with $runArgs."; return }
-
-    $scheduler = New-Object -ComObject Schedule.Service
-    $scheduler.Connect()
-    $definition = $scheduler.NewTask(0)
-    $definition.Principal.LogonType = 3
-    $definition.Settings.ExecutionTimeLimit = 'PT0S'
-    $definition.Settings.DisallowStartIfOnBatteries = $false
-    $definition.Settings.StopIfGoingOnBatteries = $false
-    $action = $definition.Actions.Create(0)
-    $action.Path = $exe
-    $action.Arguments = $runArgs
-    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $folder = $scheduler.GetFolder('\')
-    $taskName = 't3tray-start-' + [Guid]::NewGuid().ToString()
-    $task = $folder.RegisterTaskDefinition($taskName, $definition, 6, $user, $null, 3)
-    try {
-        $null = $task.Run($null)
-        Start-Sleep -Seconds 3
-    } finally { $folder.DeleteTask($taskName, 0) }
-    $deadline = (Get-Date).AddMinutes(10)
-    do {
-        $state = (& $exe status | Out-String).Trim()
-        if ($state -match '"status":"running"') { Write-Output $state; return }
-        Start-Sleep -Seconds 2
-    } while ((Get-Date) -lt $deadline)
-    throw "t3tray did not report running within 10 minutes. See $trayDir\logs. Last state $state"
-} finally {
-    if ($temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force }
+# iex has no script directory. Read the same helpers into memory in that case.
+$installerRoot = $PSScriptRoot
+$sourceBase = 'https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/installer'
+foreach ($name in @('config.ps1', 'ui.ps1', 'verify.ps1')) {
+    if ($installerRoot) { . (Join-Path $installerRoot "installer/$name") }
+    else { . ([scriptblock]::Create((Invoke-RestMethod "$sourceBase/$name"))) }
 }
+$interactive = Test-T3TrayInteractive $PSBoundParameters @(Get-ChildItem Env: | Select-Object -ExpandProperty Name)
+$legacyArgs = @{ Version = $Version; ListenHost = $ListenHost; Port = $Port; Channel = $Channel
+    ExePath = $ExePath; AssetDir = $AssetDir; NoStart = $NoStart; RetireWinT3Service = $RetireWinT3Service }
+$config = New-T3TrayConfig -Channel $Channel -ListenHost $ListenHost -Port $Port -Retire $RetireWinT3Service
+if ($interactive) {
+    try { $config = Invoke-T3TrayWizard (Get-T3TrayDetection) }
+    catch { if ($_.Exception.Message -eq 'cancelled') { Write-Host '■  Cancelled. No changes made.'; return }; throw }
+    $legacyArgs.ListenHost = $config.ListenHost
+    $legacyArgs.Port = $config.Port
+    $legacyArgs.Channel = $config.Channel
+    $legacyArgs.RetireWinT3Service = $config.Retire
+    $legacyArgs.StartAtSignIn = $config.StartAtSignIn
+    $legacyArgs.ShowSteps = $true
+}
+if ($DryRun) {
+    Write-Host '┌  t3tray  windows'
+    Write-Host '◇  dry-run. No changes made.'
+    foreach ($step in Get-T3TrayPlan $config $NoStart) { Write-T3TrayStep $step planned }
+    Write-Host '└  Plan complete. Verification is planned, not performed.'
+    return
+}
+if ($env:OS -ne 'Windows_NT') { throw 't3tray requires Windows.' }
+if ($interactive -and $config.Firewall) {
+    Invoke-T3TrayStep 'Private firewall rule (UAC)' {
+        Write-Host "Windows will ask for administrator approval to allow TCP $($config.Port) on Private networks."
+        $command = "`$ErrorActionPreference='Stop'; try { Get-NetFirewallRule -Name 'T3Tray-$($config.Port)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule; New-NetFirewallRule -Name 'T3Tray-$($config.Port)' -DisplayName 't3tray TCP $($config.Port)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $($config.Port) -Profile Private | Out-Null; exit 0 } catch { exit 1 }"
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $child = Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -EncodedCommand $encoded" -Wait -PassThru
+        if ($child.ExitCode -ne 0) { throw 'Firewall rule was not created. Approve UAC or choose to manage the firewall yourself.' }
+    }
+}
+if ($installerRoot) { & (Join-Path $installerRoot 'installer/legacy-install.ps1') @legacyArgs }
+else { & ([scriptblock]::Create((Invoke-RestMethod "$sourceBase/legacy-install.ps1"))) @legacyArgs }
+if ($interactive -and -not $NoStart) { Invoke-T3TrayVerification $config }

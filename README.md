@@ -16,6 +16,12 @@ irm https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/install.ps1 | iex
 
 The installer downloads the latest t3tray release and verifies `t3tray.exe` against its release `SHA256SUMS`. It installs `%USERPROFILE%\.t3tray\t3tray.exe`, writes `%USERPROFILE%\.t3\bin\t3tray.cmd`, and sets the current user's `T3Tray` Run value. Add `%USERPROFILE%\.t3\bin` to your user `PATH`, or call the wrapper by its full path.
 
+With no parameters or `T3TRAY_*` environment variables, the installer opens a keyboard wizard in an interactive console. It detects your existing settings and desktop channel, then asks for the channel, listen address, port, sign-in startup, and whether to retire win-t3service. LAN mode offers a Private-profile firewall rule. Only that rule requests UAC elevation. Review the changes before installing.
+
+Use arrow keys to choose, Space or Enter to confirm, `b` to go back, and `q` to quit. Text fields use Backspace to edit and Escape to go back. `-DryRun` runs the wizard and prints the plan without changing the installation. `-NonInteractive`, any configuration parameter, any `T3TRAY_*` variable, redirected input/output, or `CI` selects the existing unattended flow. For example, `./install.ps1 -DryRun -Channel nightly -ListenHost 0.0.0.0 -Port 3773` prints an unattended plan.
+
+Interactive installs verify the tray process, status, HTTP 200, and `server.getConfig` with `serverSelfUpdate=boot-service`. The RPC check creates a one-minute local authentication session and revokes it afterward. Choosing no sign-in startup removes the Run value but starts the tray for the current session. The uninstaller asks for confirmation when run without arguments in an interactive console.
+
 The tray starts through a one-shot interactive scheduled task, including when you install over SSH. You must already be signed in to the Windows desktop. The installer waits up to 10 minutes for the real server to answer HTTP 200.
 
 For explicit parameters, invoke the downloaded text as a scriptblock:

@@ -52,3 +52,21 @@ jobs:
           SMOKE_CHANNEL: ${{ matrix.channel }}
         run: |
           if ($env:SMOKE_CHANNEL -eq 'stable') { ./scripts/smoke.ps1 } else { ./scripts/smoke.ps1 -Channel nightly }
+
+  installer-tests:
+    name: Pester installer decisions
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - shell: pwsh
+        run: |
+          Install-Module Pester -RequiredVersion 5.7.1 -Force -Scope CurrentUser
+          $result = Invoke-Pester -Path tests -PassThru -Output Detailed
+          if ($result.FailedCount) { throw "$($result.FailedCount) Pester tests failed." }
+  interactive-dry-run:
+    name: Windows interactive dry-run
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - shell: powershell
+        run: ./scripts/interactive-smoke.ps1
