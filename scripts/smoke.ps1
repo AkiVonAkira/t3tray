@@ -1,8 +1,19 @@
 $ErrorActionPreference = 'Stop'
 $exe = Join-Path $env:USERPROFILE '.t3tray\t3tray.exe'
+$badAssets = Join-Path $env:TEMP ([Guid]::NewGuid().ToString())
 try {
+    $null = New-Item -ItemType Directory -Path $badAssets
+    Copy-Item "$PSScriptRoot\..\dist\SHA256SUMS" $badAssets
+    Set-Content -LiteralPath (Join-Path $badAssets 't3tray.exe') -Value 'corrupt executable'
+    try {
+        & "$PSScriptRoot\..\install.ps1" -AssetDir $badAssets -NoStart
+        throw 'The installer accepted a corrupt executable.'
+    } catch {
+        if ($_.Exception.Message -notmatch 'SHA-256 mismatch') { throw }
+        Write-Output 'Corrupt executable rejected before installation.'
+    }
     # Hosted runners have no interactive logon token for the one-shot task.
-    & "$PSScriptRoot\..\install.ps1" -AssetDir "$PSScriptRoot\..\dist" -NoStart
+    & "$PSScriptRoot\..\install.ps1" -ExePath "$PSScriptRoot\..\dist\t3tray.exe" -NoStart
     Start-Process -FilePath $exe -ArgumentList '--host 127.0.0.1 --port 3773'
     $deadline = (Get-Date).AddMinutes(10)
     do {
@@ -24,6 +35,7 @@ try {
     $null = & $exe start | Out-String
     if ($LASTEXITCODE -ne 0) { throw 'Start command failed.' }
 } finally {
+    Remove-Item -LiteralPath $badAssets -Recurse -Force -ErrorAction SilentlyContinue
     & "$PSScriptRoot\..\uninstall.ps1"
     if (Test-Path "$env:USERPROFILE\.t3tray\logs") {
         Get-ChildItem "$env:USERPROFILE\.t3tray\logs" -File | ForEach-Object { Get-Content -LiteralPath $_.FullName -Tail 60 }

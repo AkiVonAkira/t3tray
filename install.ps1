@@ -66,12 +66,11 @@ try {
         Remove-Item -LiteralPath (Join-Path $binDir 't3service.cmd') -ErrorAction SilentlyContinue
     }
     # Piping makes PowerShell wait for the GUI executable and forward its output.
-    $quotedExe = $exe.Replace("'", "''")
-    "@echo off`r`npowershell.exe -NoLogo -NoProfile -Command `"& '$quotedExe' %* | ForEach-Object { `$_ }; exit `$LASTEXITCODE`"`r`nexit /b %ERRORLEVEL%" |
+    "@echo off`r`npowershell.exe -NoLogo -NoProfile -Command `"& (Join-Path `$env:USERPROFILE '.t3tray\t3tray.exe') %* | ForEach-Object { `$_ }; exit `$LASTEXITCODE`"`r`nexit /b %ERRORLEVEL%" |
         Set-Content -LiteralPath (Join-Path $binDir 't3tray.cmd') -Encoding ascii
     $runArgs = "--host $ListenHost --port $Port"
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-    $null = New-Item -Path $runKey -Force
+    if (-not (Test-Path -LiteralPath $runKey)) { $null = New-Item -Path $runKey }
     Set-ItemProperty -Path $runKey -Name T3Tray -Value "`"$exe`" $runArgs"
     if ($NoStart) { Write-Output "Installed $exe. Start it with $runArgs."; return }
 
