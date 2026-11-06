@@ -17,10 +17,16 @@ try {
         Write-Output 'Corrupt executable rejected before installation.'
     }
     # Hosted runners have no interactive logon token for the one-shot task.
-    & "$PSScriptRoot\..\install.ps1" -ExePath "$PSScriptRoot\..\dist\t3tray.exe" -Channel $Channel -NoStart
+    $installArgs = @{ ExePath = "$PSScriptRoot\..\dist\t3tray.exe"; NoStart = $true }
+    $launchArgs = '--host 127.0.0.1 --port 3773'
+    if ($Channel -eq 'nightly') {
+        $installArgs.Channel = $Channel
+        $launchArgs += ' --channel nightly'
+    }
+    & "$PSScriptRoot\..\install.ps1" @installArgs
     $runValue = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name T3Tray).T3Tray
     if ($runValue -notlike "*--channel $Channel") { throw "Run value does not select $Channel." }
-    Start-Process -FilePath $exe -ArgumentList "--host 127.0.0.1 --port 3773 --channel $Channel"
+    Start-Process -FilePath $exe -ArgumentList $launchArgs
     $deadline = (Get-Date).AddMinutes(10)
     do {
         $state = (& $exe status | Out-String).Trim()
