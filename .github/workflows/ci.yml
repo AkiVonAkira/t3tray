@@ -70,3 +70,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - shell: powershell
         run: ./scripts/interactive-smoke.ps1
+      # irm | iex has no script folder, so helpers come from GitHub at this commit.
+      - name: Dry-run with no script folder
+        shell: powershell
+        env:
+          T3TRAY_REF: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ([scriptblock]::Create((Get-Content install.ps1 -Raw))) -DryRun -NonInteractive
+          & ([scriptblock]::Create((Get-Content uninstall.ps1 -Raw))) -DryRun -NonInteractive

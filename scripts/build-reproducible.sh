@@ -22,5 +22,11 @@ cmp "$first" "$second"
 mkdir -p dist
 cp "$first" dist/t3tray.exe
 cp install.ps1 uninstall.ps1 dist/
+# A tagged release fetches helpers from its own tag, not from main.
+if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
+  sed -i "s/^\$sourceRef = 'main'\$/\$sourceRef = '$GITHUB_REF_NAME'/" dist/install.ps1 dist/uninstall.ps1
+  grep -q "^\$sourceRef = '$GITHUB_REF_NAME'\$" dist/install.ps1
+  grep -q "^\$sourceRef = '$GITHUB_REF_NAME'\$" dist/uninstall.ps1
+fi
 (cd dist && sha256sum t3tray.exe install.ps1 uninstall.ps1 > SHA256SUMS)
 echo 'Reproducibility verified: both clean builds are byte-identical.'

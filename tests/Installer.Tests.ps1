@@ -18,6 +18,9 @@ Describe 'Mode selection' {
     It 'keeps every T3TRAY environment variable unattended' {
         Test-T3TrayInteractive @{} @('T3TRAY_FUTURE') $false $false $false | Should -BeFalse
     }
+    It 'stays interactive when only T3TRAY_REF picks the helper branch' {
+        Test-T3TrayInteractive @{} @('T3TRAY_REF') $false $false $false | Should -BeTrue
+    }
     It 'keeps redirection and CI unattended' {
         Test-T3TrayInteractive @{} @() $true $false $false | Should -BeFalse
         Test-T3TrayInteractive @{} @() $false $true $false | Should -BeFalse

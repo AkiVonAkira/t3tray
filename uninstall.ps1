@@ -2,9 +2,13 @@
 param([switch]$Purge, [switch]$NonInteractive, [switch]$DryRun)
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$sourceBase = 'https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/installer'
+# Release builds stamp the tag here. T3TRAY_REF picks a branch when piping a branch's script to iex.
+$sourceRef = 'main'
+if ($env:T3TRAY_REF) { $sourceRef = $env:T3TRAY_REF }
+$sourceBase = "https://raw.githubusercontent.com/AkiVonAkira/t3tray/$sourceRef/installer"
+$localHelpers = $PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'installer/config.ps1'))
 foreach ($name in @('config.ps1', 'ui.ps1')) {
-    if ($PSScriptRoot) { . (Join-Path $PSScriptRoot "installer/$name") }
+    if ($localHelpers) { . (Join-Path $PSScriptRoot "installer/$name") }
     else { . ([scriptblock]::Create(([string](Invoke-RestMethod "$sourceBase/$name")).TrimStart([char]0xFEFF))) }
 }
 $interactive = Test-T3TrayInteractive $PSBoundParameters @(Get-ChildItem Env: | Select-Object -ExpandProperty Name)
@@ -23,7 +27,7 @@ if ($DryRun) {
     return
 }
 $action = {
-    if ($PSScriptRoot) { & (Join-Path $PSScriptRoot 'installer/legacy-uninstall.ps1') -Purge:$Purge -ShowSteps:$interactive }
+    if ($localHelpers) { & (Join-Path $PSScriptRoot 'installer/legacy-uninstall.ps1') -Purge:$Purge -ShowSteps:$interactive }
     else { & ([scriptblock]::Create(([string](Invoke-RestMethod "$sourceBase/legacy-uninstall.ps1")).TrimStart([char]0xFEFF))) -Purge:$Purge -ShowSteps:$interactive }
 }
 & $action

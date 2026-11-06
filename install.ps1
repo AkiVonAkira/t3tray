@@ -20,9 +20,13 @@ $ProgressPreference = 'SilentlyContinue'
 # iex has no script directory. Read the same helpers into memory in that case.
 $installerRoot = $PSScriptRoot
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$sourceBase = 'https://raw.githubusercontent.com/AkiVonAkira/t3tray/main/installer'
+# Release builds stamp the tag here. T3TRAY_REF picks a branch when piping a branch's script to iex.
+$sourceRef = 'main'
+if ($env:T3TRAY_REF) { $sourceRef = $env:T3TRAY_REF }
+$sourceBase = "https://raw.githubusercontent.com/AkiVonAkira/t3tray/$sourceRef/installer"
+$localHelpers = $installerRoot -and (Test-Path (Join-Path $installerRoot 'installer/config.ps1'))
 foreach ($name in @('config.ps1', 'ui.ps1', 'verify.ps1')) {
-    if ($installerRoot) { . (Join-Path $installerRoot "installer/$name") }
+    if ($localHelpers) { . (Join-Path $installerRoot "installer/$name") }
     else { . ([scriptblock]::Create(([string](Invoke-RestMethod "$sourceBase/$name")).TrimStart([char]0xFEFF))) }
 }
 $interactive = Test-T3TrayInteractive $PSBoundParameters @(Get-ChildItem Env: | Select-Object -ExpandProperty Name)
@@ -61,6 +65,6 @@ if ($interactive -and $config.Firewall) {
         if ($child.ExitCode -ne 0) { throw 'Firewall rule was not created. Approve UAC or choose to manage the firewall yourself.' }
     }
 }
-if ($installerRoot) { & (Join-Path $installerRoot 'installer/legacy-install.ps1') @legacyArgs }
+if ($localHelpers) { & (Join-Path $installerRoot 'installer/legacy-install.ps1') @legacyArgs }
 else { & ([scriptblock]::Create(([string](Invoke-RestMethod "$sourceBase/legacy-install.ps1")).TrimStart([char]0xFEFF))) @legacyArgs }
 if ($interactive -and -not $NoStart) { Invoke-T3TrayVerification $config }

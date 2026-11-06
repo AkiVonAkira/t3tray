@@ -3,7 +3,7 @@
         [bool]$InputRedirected = [Console]::IsInputRedirected,
         [bool]$OutputRedirected = [Console]::IsOutputRedirected, [bool]$CiSet = (Test-Path Env:CI))
     if ($InputRedirected -or $OutputRedirected -or $CiSet) { return $false }
-    if (@($EnvironmentNames | Where-Object { $_ -like 'T3TRAY_*' }).Count) { return $false }
+    if (@($EnvironmentNames | Where-Object { $_ -like 'T3TRAY_*' -and $_ -ne 'T3TRAY_REF' }).Count) { return $false }
     return @($Parameters.Keys | Where-Object { $_ -ne 'DryRun' }).Count -eq 0
 }
 
