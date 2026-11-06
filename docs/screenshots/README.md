@@ -19,6 +19,19 @@ includes the Private-network firewall rule.
 
 ![Grouped review before installation](installer-review-v3.png)
 
+## Update an existing install
+
+When t3tray is already installed, the check screen offers an update first. It
+keeps the saved channel, address, port, T3 home, and sign-in setting, and skips
+the firewall step. **Change settings and reinstall** opens the usual steps.
+
+![Check screen with update and reinstall choices](installer-update-check-v1.png)
+
+The review lists the saved settings and ends on **Update**. Go back returns to
+the check screen. This example has sign-in startup off and a custom T3 home.
+
+![Review of an update with saved settings](installer-update-review-v1.png)
+
 ## Finish setup
 
 This preview calls the progress and summary renderers with simulated successful

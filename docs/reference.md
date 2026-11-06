@@ -116,6 +116,19 @@ installer's exit code. Errors before the installer starts change nothing.
 Re-running the installer also updates t3tray. `-Version` selects t3tray;
 `-Channel` selects the initial upstream server. They are independent.
 
+When t3tray is installed, the wizard's check screen offers two choices:
+
+- **Update with current settings** goes straight to review. It keeps the
+  channel, address, port, T3 home, and sign-in setting, and makes no firewall
+  change. Go back returns to the check screen.
+- **Change settings and reinstall** runs the usual steps with the saved settings
+  suggested, and ends on **Reinstall**.
+
+The wizard reads saved settings from the `T3Tray` sign-in entry. Without that
+entry it reads `.t3tray\state.json` and keeps sign-in startup off. Unattended
+runs use the parameters they are given; use `t3tray update` to keep saved
+settings from a script.
+
 ## Build and release
 
 Use Rust and MinGW-w64. `rust-toolchain.toml` pins Rust and the Windows GNU target.

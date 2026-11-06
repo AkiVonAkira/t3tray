@@ -123,7 +123,7 @@ Describe 'Configuration and plans' {
 Describe 'Wizard navigation with scripted answers' {
     It 'goes from start at sign-in to review and back, keeping LAN choices and the T3 home' {
         $script:answers = [Collections.Generic.Queue[int]]::new()
-        foreach ($answer in @(0, 1, 1, 0, 1, 1, 0, 0)) { $script:answers.Enqueue($answer) }
+        foreach ($answer in @(1, 1, 1, 0, 1, 1, 0, 0)) { $script:answers.Enqueue($answer) }
         Mock Read-T3TrayChoice { $script:answers.Dequeue() }
         Mock Read-T3TrayText { '4000' }
         Mock Get-T3TrayPortOwner { 'Available' }
@@ -152,6 +152,77 @@ Describe 'Wizard branches' {
         $config.Port | Should -Be 5000
         $config.Firewall | Should -BeFalse
         $script:fields.Count | Should -Be 0
+    }
+}
+Describe 'Rerunning the installer on an existing install' {
+    BeforeEach {
+        $script:frames = [Collections.Generic.List[object]]::new()
+        Mock Write-T3TrayFrame { $script:frames.Add([pscustomobject]@{ Title = $Title; Lines = @($Lines | ForEach-Object { $_ -replace "$([char]27)\[[0-9;]*m", '' }) }) }
+        Mock Read-T3TrayKey { $script:keys.Dequeue() }
+        Mock Get-T3TrayPortOwner { 'Available' }
+        $saved = New-T3TrayConfig -Channel nightly -ListenHost '0.0.0.0' -Port 4100 -BaseDir 'D:\T3 Home' -StartAtSignIn $false
+        $script:existing = [pscustomobject]@{ Config = $saved; Installed = $true; RunValue = ''; Desktop = 'Not found'; PortOwner = 'Available' }
+        function Get-Option([string]$Title, [int]$Index = -1) {
+            $frame = @($script:frames | Where-Object Title -EQ $Title)[$Index]
+            @($frame.Lines | Where-Object { $_ -match "^[$([char]0x25CF)$([char]0x25CB)]  " } | ForEach-Object { $_.Substring(3) })
+        }
+        function Get-Screen { $previous = ''; foreach ($title in $script:frames.Title) { if ($title -ne $previous) { $title }; $previous = $title } }
+    }
+    It 'updates with the saved settings, skipping configuration and the firewall' {
+        Initialize-TestInput @((Get-TestKey Enter), (Get-TestKey Enter))
+        $config = Invoke-T3TrayWizard $script:existing
+        Get-Option check | Should -Be @('Update with current settings', 'Change settings and reinstall')
+        Get-Option review | Should -Be @('Update', 'Go back')
+        @(Get-Screen) | Should -Be @('check', 'review')
+        $config.Channel | Should -Be nightly
+        $config.ListenHost | Should -Be '0.0.0.0'
+        $config.Port | Should -Be 4100
+        $config.BaseDir | Should -Be 'D:\T3 Home'
+        $config.StartAtSignIn | Should -BeFalse
+        $config.Firewall | Should -BeFalse
+    }
+    It 'returns from the update review to check, then reinstalls with changed settings' {
+        Initialize-TestInput @((Get-TestKey Enter), (Get-TestKey B 'b'), (Get-TestKey DownArrow), (Get-TestKey Enter),
+            (Get-TestKey Enter), (Get-TestKey Enter), (Get-TestKey UpArrow), (Get-TestKey Enter), (Get-TestKey Enter), (Get-TestKey Enter), (Get-TestKey Enter))
+        $config = Invoke-T3TrayWizard $script:existing
+        @(Get-Screen) | Should -Be @('check', 'review', 'check', 'channel', 'listen address', 'Windows Firewall', 'port', 'start at sign-in', 'review')
+        Get-Option review | Should -Be @('Reinstall', 'Go back')
+        $config.Firewall | Should -BeTrue
+        $config.BaseDir | Should -Be 'D:\T3 Home'
+        $config.StartAtSignIn | Should -BeFalse
+    }
+    It 'updates with the saved settings after edits were abandoned with back' {
+        Initialize-TestInput @((Get-TestKey DownArrow), (Get-TestKey Enter), (Get-TestKey UpArrow), (Get-TestKey Enter),
+            (Get-TestKey B 'b'), (Get-TestKey B 'b'), (Get-TestKey Enter), (Get-TestKey Enter))
+        $config = Invoke-T3TrayWizard $script:existing
+        @(Get-Screen) | Should -Be @('check', 'channel', 'listen address', 'channel', 'check', 'review')
+        Get-Option review | Should -Be @('Update', 'Go back')
+        $config.Channel | Should -Be nightly
+    }
+    It 'keeps the first-time install to one configure path' {
+        Initialize-TestInput @((Get-TestKey Enter), (Get-TestKey Enter), (Get-TestKey Enter), (Get-TestKey Enter), (Get-TestKey Enter), (Get-TestKey Enter))
+        $fresh = [pscustomobject]@{ Config = (New-T3TrayConfig); Installed = $false; RunValue = ''; Desktop = 'Not found'; PortOwner = 'Available' }
+        $config = Invoke-T3TrayWizard $fresh
+        Get-Option check | Should -Be @('Configure and install')
+        Get-Option review | Should -Be @('Install', 'Go back')
+        $config.ListenHost | Should -Be '127.0.0.1'
+    }
+    It 'reads saved settings from tray state when sign-in startup is off' {
+        $previous = @{ USERPROFILE = $env:USERPROFILE; LOCALAPPDATA = $env:LOCALAPPDATA }
+        try {
+            $env:USERPROFILE = Join-Path $TestDrive 'user'
+            $env:LOCALAPPDATA = Join-Path $TestDrive 'local'
+            $null = New-Item -ItemType Directory -Force "$env:USERPROFILE/.t3tray"
+            Set-Content "$env:USERPROFILE/.t3tray/t3tray.exe" 'fixture'
+            '{"status":"running","channel":"nightly","host":"0.0.0.0","port":4100,"baseDir":"D:\\T3 Home"}' | Set-Content "$env:USERPROFILE/.t3tray/state.json"
+            Mock Get-ItemProperty { $null }
+            $config = (Get-T3TrayDetection).Config
+            $config.Channel | Should -Be nightly
+            $config.ListenHost | Should -Be '0.0.0.0'
+            $config.Port | Should -Be 4100
+            $config.BaseDir | Should -Be 'D:\T3 Home'
+            $config.StartAtSignIn | Should -BeFalse
+        } finally { $env:USERPROFILE = $previous.USERPROFILE; $env:LOCALAPPDATA = $previous.LOCALAPPDATA }
     }
 }
 Describe 'Executable replacement' {
