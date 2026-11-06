@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.1
 
 - Make `t3tray status` readable by default. Scripts must use `t3tray status --json`.
 - Clarify installer text entry, group the review, and show one result per install step with completion instructions.
