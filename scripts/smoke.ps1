@@ -61,7 +61,7 @@ function Open-FixtureReleaseServer([string]$Root, [int]$Port) {
             } elseif ($parts.Count -eq 2 -and $parts[0] -eq 'installer') {
                 $file = Join-Path (Join-Path $root 'installer') $parts[1]
             }
-            if ($file -and ($parts | Where-Object { $_ -notmatch '^[A-Za-z0-9.]+$' -or $_ -eq '..' })) { $file = $null }
+            if ($file -and ($parts | Where-Object { $_ -notmatch '^[A-Za-z0-9.-]+$' -or $_ -eq '..' })) { $file = $null }
             if ($file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
                 $bytes = [IO.File]::ReadAllBytes($file)
                 $response.ContentType = 'application/octet-stream'
