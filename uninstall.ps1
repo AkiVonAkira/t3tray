@@ -8,6 +8,7 @@ foreach ($name in @('config.ps1', 'ui.ps1')) {
 }
 $interactive = Test-T3TrayInteractive $PSBoundParameters @(Get-ChildItem Env: | Select-Object -ExpandProperty Name)
 if ($interactive) {
+    Initialize-T3TrayConsole
     try {
         $choice = Read-T3TrayChoice 'uninstall' @('Uninstall t3tray', 'Cancel') 1 @(
             'Stop the tray, remove sign-in startup, executable and wrapper.', 'Keep logs and T3 data. -Purge also removes tray logs.')

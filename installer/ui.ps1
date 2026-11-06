@@ -1,5 +1,26 @@
 ﻿# Visual reference: Kayzel's Stillwater installer and palette.json.
 # This implementation uses only the controls needed by t3tray.
+function Initialize-T3TrayConsole {
+    try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding } catch { }
+    if ($env:OS -ne 'Windows_NT' -or $Host.UI.SupportsVirtualTerminal) { return }
+    if (-not ('T3TrayNativeConsole' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class T3TrayNativeConsole {
+    [DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int id);
+    [DllImport("kernel32.dll")] public static extern bool GetConsoleMode(IntPtr handle, out uint mode);
+    [DllImport("kernel32.dll")] public static extern bool SetConsoleMode(IntPtr handle, uint mode);
+}
+'@
+    }
+    $handle = [T3TrayNativeConsole]::GetStdHandle(-11)
+    [uint32]$mode = 0
+    if ([T3TrayNativeConsole]::GetConsoleMode($handle, [ref]$mode)) {
+        [void][T3TrayNativeConsole]::SetConsoleMode($handle, ($mode -bor 4))
+    }
+}
+
 function Get-T3TrayStyle {
     $esc = [char]27
     $style = @{ Reset = "$esc[0m"; Accent = "$esc[38;2;90;168;180m"
@@ -58,6 +79,7 @@ function Read-T3TrayText {
 
 function Invoke-T3TrayWizard {
     param($Detection)
+    Initialize-T3TrayConsole
     $config = $Detection.Config
     $step = 'Check'
     $listenChoice = if ($config.ListenHost -eq '127.0.0.1') { 0 } elseif ($config.ListenHost -eq '0.0.0.0') { 1 } else { 2 }
