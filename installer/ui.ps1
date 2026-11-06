@@ -1,7 +1,8 @@
 ﻿# Visual reference: Kayzel's Stillwater installer and palette.json.
 # This implementation uses only the controls needed by t3tray.
 function Initialize-T3TrayConsole {
-    try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding } catch { }
+    try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding }
+    catch { Write-Verbose 'Console encoding could not be set. Using the terminal default.' }
     if ($env:OS -ne 'Windows_NT' -or $Host.UI.SupportsVirtualTerminal) { return }
     if (-not ('T3TrayNativeConsole' -as [type])) {
         Add-Type -TypeDefinition @'
