@@ -64,7 +64,7 @@ function Open-FixtureReleaseServer([string]$Root, [int]$Port) {
             if ($file -and ($parts | Where-Object { $_ -notmatch '^[A-Za-z0-9.-]+$' -or $_ -eq '..' })) { $file = $null }
             if ($file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
                 $bytes = [IO.File]::ReadAllBytes($file)
-                $response.ContentType = 'application/octet-stream'
+                $response.ContentType = if ($file.EndsWith('.ps1')) { 'text/plain; charset=utf-8' } else { 'application/octet-stream' }
                 $response.OutputStream.Write($bytes, 0, $bytes.Length)
             } elseif ($response.StatusCode -ne 302) { $response.StatusCode = 404 }
             $response.Close()
@@ -200,7 +200,7 @@ try {
     Remove-Item -LiteralPath $badAssets -Recurse -Force -ErrorAction SilentlyContinue
     & "$PSScriptRoot\..\uninstall.ps1"
     if (Test-Path "$env:USERPROFILE\.t3tray\logs") {
-        Get-ChildItem "$env:USERPROFILE\.t3tray\logs" -File | ForEach-Object { Get-Content -LiteralPath $_.FullName -Tail 60 }
+        Get-ChildItem "$env:USERPROFILE\.t3tray\logs" -File -Filter 't3tray.log' | ForEach-Object { Get-Content -LiteralPath $_.FullName -Tail 60 }
     }
 }
 $remaining = @(Get-Process -Name t3tray, t3 -ErrorAction SilentlyContinue)
