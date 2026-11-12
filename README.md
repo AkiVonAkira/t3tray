@@ -1,5 +1,23 @@
 # t3tray
 
+> [!IMPORTANT]
+> **No longer needed. This repo is archived.** T3 Code runs as a Windows
+> background service on its own as of T3 Code Nightly
+> 0.1.10-nightly.20261112.4564 (bc647ed53595), through
+> [pingdotgg/t3code#34524](https://github.com/pingdotgg/t3code/pull/34524),
+> which builds on this repo's work in
+> [#27415](https://github.com/pingdotgg/t3code/pull/27415).
+>
+> To move off t3tray, wait for running agent turns, then:
+>
+> 1. Run [uninstall.ps1](#uninstall). It keeps your `.t3` data.
+> 2. Install the `t3` CLI: `$env:T3CODE_CHANNEL="nightly"; irm https://t3.codes/install.ps1 | iex`
+> 3. Run `t3 service install`. For LAN and tailnet access, also run
+>    `t3 up --lan`.
+>
+> See T3's
+> [background service docs](https://github.com/pingdotgg/t3code/blob/main/docs/user/background-service.md).
+
 Run the T3 Code server from your Windows system tray. Start it at sign-in, see
 its status, and manage server updates from T3 Code's **Update machines** dialog.
 
